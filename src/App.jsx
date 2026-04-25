@@ -1,14 +1,35 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useContext, useMemo, createContext } from "react";
 
-// ─── PALETTE ───────────────────────────────────────────────
-const C = {
+// ─── PALETTES ──────────────────────────────────────────────
+const LIGHT = {
   navy:'#1a3557', navyMid:'#24497a', navyLight:'#e8f0fb',
   amber:'#c47d0e', amberBg:'#fef9ec', amberBorder:'#f5c842',
   green:'#166534', greenBg:'#dcfce7', greenBorder:'#86efac',
   red:'#991b1b', redBg:'#fee2e2', redBorder:'#fca5a5',
   gray:'#475569', grayLight:'#f1f5f9', border:'#e2e8f0',
   text:'#1e293b', muted:'#64748b', white:'#ffffff',
+  surface:'#ffffff', bg:'#f8fafc',
+  navBg:'#1a3557', navActiveText:'#1a3557',
+  navInactive:'#93c5fd', navDisabled:'#2d4a63', navBorder:'#2d4a63',
+  resetText:'#f87171', resetLabel:'#fca5a5',
+  resetYesBg:'#dc2626', resetNoText:'#94a3b8',
 };
+const DARK = {
+  navy:'#60a5fa', navyMid:'#3b82f6', navyLight:'#1e3a5f',
+  amber:'#fbbf24', amberBg:'#3f2e0e', amberBorder:'#b45309',
+  green:'#86efac', greenBg:'#14532d', greenBorder:'#15803d',
+  red:'#fca5a5', redBg:'#3f1a1a', redBorder:'#7f1d1d',
+  gray:'#cbd5e1', grayLight:'#1e293b', border:'#334155',
+  text:'#e2e8f0', muted:'#94a3b8', white:'#0f172a',
+  surface:'#1e293b', bg:'#0f172a',
+  navBg:'#0b1628', navActiveText:'#0f172a',
+  navInactive:'#94a3b8', navDisabled:'#475569', navBorder:'#334155',
+  resetText:'#f87171', resetLabel:'#fca5a5',
+  resetYesBg:'#dc2626', resetNoText:'#94a3b8',
+};
+const ThemeContext = createContext({ C: LIGHT, dark: false, toggle: () => {} });
+const useC = () => useContext(ThemeContext).C;
+const useTheme = () => useContext(ThemeContext);
 
 // ─── PRETEST QUESTIONS ─────────────────────────────────────
 const PRETEST = [
@@ -302,7 +323,7 @@ const POSTTEST = [
 // ─── LEARNING MODULES ──────────────────────────────────────
 const MODULES = {
   'Foundations of Literacy': {
-    icon:'📖', color:C.navy,
+    icon:'📖',
     concepts:[
       {title:'Phonological Awareness',body:'The ability to hear and manipulate the sound structure of language without using print. Includes syllable awareness, rhyme recognition, onset-rime, and phoneme manipulation. This skill PRECEDES and supports phonics learning.'},
       {title:'Phonics',body:'The systematic relationship between letters (graphemes) and sounds (phonemes). Key skills include consonant digraphs (sh, ch, th, wh), blends (bl, str), short/long vowel patterns, and the silent-e rule (CVCe).'},
@@ -372,7 +393,7 @@ const MODULES = {
     ]
   },
   'Number Sense & Operations': {
-    icon:'🔢', color:C.green,
+    icon:'🔢',
     concepts:[
       {title:'Fractions',body:'To compare fractions: find common denominators or use benchmark fractions (0, 1/2, 1). To add/subtract: need common denominators. To multiply: multiply numerators and denominators. To divide: multiply by the reciprocal (flip and multiply).'},
       {title:'Decimals and Place Value',body:'Each decimal place has a value: tenths (0.1), hundredths (0.01), thousandths (0.001). When comparing decimals, align decimal points and compare place by place from left to right. 0.3 = 0.30 = 3 tenths > 0.25 = 25 hundredths.'},
@@ -386,7 +407,7 @@ const MODULES = {
     ]
   },
   'Algebra & Functions': {
-    icon:'➗', color:C.green,
+    icon:'➗',
     concepts:[
       {title:'Patterns and Rules',body:'Identify the rule in a number pattern by looking at what operation is applied consistently. Arithmetic patterns: add or subtract a constant (e.g., +3 each time). Geometric patterns: multiply or divide by a constant. Express rules as formulas (e.g., 3n + 1).'},
       {title:'Writing Expressions and Equations',body:'Key translations: "more than" or "increased by" = +; "less than" or "decreased by" = −; "times" or "product of" = ×; "quotient of" or "divided by" = ÷. "Is" or "equals" = =. Always identify the unknown as a variable first.'},
@@ -400,7 +421,7 @@ const MODULES = {
     ]
   },
   'Geometry & Measurement': {
-    icon:'📐', color:C.green,
+    icon:'📐',
     concepts:[
       {title:'Area vs. Perimeter',body:'Perimeter = total distance around a shape (add all sides). Area = space inside a shape (square units). Rectangle: P = 2l + 2w; A = l × w. Triangle: A = ½ × base × height. Always include correct units: perimeter uses linear units (cm), area uses square units (cm²).'},
       {title:'Properties of Shapes',body:'Quadrilaterals: 4 sides. Parallelogram: 2 pairs of parallel sides. Rectangle: parallelogram with 4 right angles. Square: rectangle with 4 equal sides. Rhombus: parallelogram with 4 equal sides. Trapezoid: exactly 1 pair of parallel sides.'},
@@ -414,7 +435,7 @@ const MODULES = {
     ]
   },
   'Data Analysis & Probability': {
-    icon:'📊', color:C.green,
+    icon:'📊',
     concepts:[
       {title:'Measures of Central Tendency',body:'Mean: add all values, divide by count (the "average"). Median: middle value when ordered (if even count, average the two middle values). Mode: most frequently occurring value. Range: highest − lowest (measure of spread, not center).'},
       {title:'When to Use Each Measure',body:'Mean: good for symmetric data without outliers. Median: better for skewed data or when outliers are present (e.g., income data). Mode: useful for categorical data (most popular color, shoe size). Exams often ask students to identify which is "best" for a given situation.'},
@@ -509,6 +530,26 @@ const SUBTESTS = {
   ARTS: { label:'Arts & Sciences',   emoji:'🌍' },
 };
 
+const shuffle = (arr) => {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+const buildQuizPool = () => {
+  const pool = {};
+  PRETEST.forEach(q => { (pool[q.d] = pool[q.d] || []).push(q); });
+  POSTTEST.forEach(q => { (pool[q.d] = pool[q.d] || []).push(q); });
+  Object.entries(MODULES).forEach(([d, mod]) => {
+    const subtest = (PRETEST.find(q => q.d === d) || POSTTEST.find(q => q.d === d) || {}).s || 'ARTS';
+    (mod.practice || []).forEach(p => { (pool[d] = pool[d] || []).push({ ...p, s: subtest, d }); });
+  });
+  return pool;
+};
+
 const INITIAL_STATE = {
   phase:'welcome',
   qIndex:0,
@@ -521,31 +562,52 @@ const INITIAL_STATE = {
   modPAnswers:{},
   postAnswers:{},
   postScores:null,
+  // flashcards
+  fcDomain:null,
+  fcOrder:[],
+  fcPos:0,
+  fcFlipped:false,
+  fcKnown:[],
+  // quiz
+  quizDomain:null,
+  quizLen:10,
+  quizQs:null,
+  quizIdx:0,
+  quizAnswers:{},
 };
 
 // ─── COMPONENTS ────────────────────────────────────────────
 
-const ProgressBar = ({ value, color='#1a3557', label }) => (
-  <div>
-    <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
-      <span style={{fontSize:13,color:C.muted}}>{label}</span>
-      <span style={{fontSize:13,fontWeight:700,color}}>{value}%</span>
+const ProgressBar = ({ value, color, label }) => {
+  const C = useC();
+  const barColor = color || C.navy;
+  return (
+    <div>
+      <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+        <span style={{fontSize:13,color:C.muted}}>{label}</span>
+        <span style={{fontSize:13,fontWeight:700,color:barColor}}>{value}%</span>
+      </div>
+      <div style={{background:C.border,borderRadius:99,height:8,overflow:'hidden'}}>
+        <div style={{width:`${value}%`,height:'100%',background:barColor,borderRadius:99,transition:'width 0.6s ease'}}/>
+      </div>
     </div>
-    <div style={{background:C.border,borderRadius:99,height:8,overflow:'hidden'}}>
-      <div style={{width:`${value}%`,height:'100%',background:color,borderRadius:99,transition:'width 0.6s ease'}}/>
-    </div>
-  </div>
-);
+  );
+};
 
 const Pill = ({text, color, bg}) => (
   <span style={{fontSize:11,fontWeight:700,color,background:bg,padding:'2px 8px',borderRadius:99,textTransform:'uppercase',letterSpacing:'0.05em'}}>{text}</span>
 );
 
-const Card = ({children, style={}}) => (
-  <div style={{background:C.white,borderRadius:16,padding:28,boxShadow:'0 2px 16px rgba(0,0,0,0.07)',border:`1px solid ${C.border}`,...style}}>{children}</div>
-);
+const Card = ({children, style={}}) => {
+  const C = useC();
+  return (
+    <div style={{background:C.surface,borderRadius:16,padding:28,boxShadow:'0 2px 16px rgba(0,0,0,0.07)',border:`1px solid ${C.border}`,...style}}>{children}</div>
+  );
+};
 
-const Welcome = ({onStart}) => (
+const Welcome = ({onStart}) => {
+  const C = useC();
+  return (
   <div style={{maxWidth:640,margin:'0 auto',padding:'40px 20px',fontFamily:'Georgia, serif'}}>
     <div style={{textAlign:'center',marginBottom:40}}>
       <div style={{fontSize:56,marginBottom:12}}>🎓</div>
@@ -588,9 +650,11 @@ const Welcome = ({onStart}) => (
       Begin Pretest →
     </button>
   </div>
-);
+  );
+};
 
 const QuestionScreen = ({questions, answers, qIndex, onAnswer, onNav, onSubmit, phase}) => {
+  const C = useC();
   const q = questions[qIndex];
   const selected = answers[qIndex];
   const total = questions.length;
@@ -620,8 +684,8 @@ const QuestionScreen = ({questions, answers, qIndex, onAnswer, onNav, onSubmit, 
           const isSelected = selected === i;
           return (
             <button key={i} onClick={() => onAnswer(qIndex, i)}
-              style={{textAlign:'left',padding:'14px 18px',borderRadius:12,border:`2px solid ${isSelected ? C.navy : C.border}`,background:isSelected ? C.navyLight : C.white,cursor:'pointer',fontSize:15,color:C.text,transition:'all 0.15s',display:'flex',alignItems:'center',gap:12,fontFamily:'system-ui'}}>
-              <span style={{width:24,height:24,borderRadius:'50%',border:`2px solid ${isSelected ? C.navy : C.border}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:isSelected ? C.navy : C.muted,flexShrink:0,background:isSelected ? C.white : 'transparent'}}>
+              style={{textAlign:'left',padding:'14px 18px',borderRadius:12,border:`2px solid ${isSelected ? C.navy : C.border}`,background:isSelected ? C.navyLight : C.surface,cursor:'pointer',fontSize:15,color:C.text,transition:'all 0.15s',display:'flex',alignItems:'center',gap:12,fontFamily:'system-ui'}}>
+              <span style={{width:24,height:24,borderRadius:'50%',border:`2px solid ${isSelected ? C.navy : C.border}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:isSelected ? C.navy : C.muted,flexShrink:0,background:isSelected ? C.surface : 'transparent'}}>
                 {['A','B','C','D'][i]}
               </span>
               {opt}
@@ -632,7 +696,7 @@ const QuestionScreen = ({questions, answers, qIndex, onAnswer, onNav, onSubmit, 
 
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
         <button onClick={() => onNav(-1)} disabled={qIndex===0}
-          style={{padding:'10px 20px',borderRadius:10,border:`1px solid ${C.border}`,background:C.white,color:qIndex===0?C.muted:C.navy,cursor:qIndex===0?'default':'pointer',fontSize:14,fontWeight:600}}>
+          style={{padding:'10px 20px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,color:qIndex===0?C.muted:C.navy,cursor:qIndex===0?'default':'pointer',fontSize:14,fontWeight:600}}>
           ← Back
         </button>
         <span style={{fontSize:13,color:C.muted}}>{answeredCount}/{total} answered</span>
@@ -648,9 +712,18 @@ const QuestionScreen = ({questions, answers, qIndex, onAnswer, onNav, onSubmit, 
   );
 };
 
-const Results = ({scores, weakDomains, onContinue, isPost, pretestScores}) => {
+const Results = ({scores, weakDomains, onContinue, isPost, pretestScores, sourceQuestions, sourceAnswers}) => {
+  const C = useC();
+  const [reviewing, setReviewing] = useState(false);
   const overall = Object.values(scores.subtests).reduce((a,b) => ({correct:a.correct+b.correct,total:a.total+b.total}),{correct:0,total:0});
   const overallPct = pct(overall.correct, overall.total);
+  const missed = sourceQuestions
+    ? sourceQuestions.map((q,i) => ({q,i,user:sourceAnswers?.[i]})).filter(x => x.user !== x.q.c)
+    : [];
+
+  if (reviewing && missed.length > 0) {
+    return <ReviewIncorrect items={missed} onBack={() => setReviewing(false)}/>;
+  }
 
   return (
     <div style={{maxWidth:680,margin:'0 auto',padding:'32px 20px',fontFamily:'system-ui'}}>
@@ -717,6 +790,13 @@ const Results = ({scores, weakDomains, onContinue, isPost, pretestScores}) => {
         </div>
       )}
 
+      {missed.length > 0 && (
+        <button onClick={() => setReviewing(true)}
+          style={{width:'100%',padding:'14px',background:C.surface,color:C.navy,border:`2px solid ${C.navy}`,borderRadius:12,fontSize:15,fontWeight:700,cursor:'pointer',fontFamily:'Georgia,serif',marginBottom:12}}>
+          🔍 Review Missed Questions ({missed.length})
+        </button>
+      )}
+
       <button onClick={onContinue} style={{width:'100%',padding:'16px',background:C.navy,color:C.white,border:'none',borderRadius:12,fontSize:16,fontWeight:700,cursor:'pointer',fontFamily:'Georgia,serif'}}>
         {isPost ? 'Done! View Final Summary' : weakDomains.length > 0 ? `Start Study Modules (${weakDomains.length}) →` : 'Skip to Post-Test →'}
       </button>
@@ -724,7 +804,61 @@ const Results = ({scores, weakDomains, onContinue, isPost, pretestScores}) => {
   );
 };
 
-const ModuleHub = ({weakDomains, completedModules, onSelect, onSkip}) => (
+const ReviewIncorrect = ({items, onBack}) => {
+  const C = useC();
+  const [idx, setIdx] = useState(0);
+  const cur = items[idx];
+  const q = cur.q;
+  return (
+    <div style={{maxWidth:680,margin:'0 auto',padding:'32px 20px',fontFamily:'system-ui'}}>
+      <button onClick={onBack} style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:14,marginBottom:16,padding:0}}>← Back to results</button>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <Pill text={SUBTESTS[q.s]?.label || 'Review'} color={C.navy} bg={C.navyLight}/>
+        <span style={{fontSize:13,color:C.muted}}>Missed {idx+1} of {items.length}</span>
+      </div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:8}}>{q.d}</div>
+      <Card style={{marginBottom:16}}>
+        <p style={{fontSize:16,lineHeight:1.6,color:C.text,margin:0,fontFamily:'Georgia,serif',fontWeight:500}}>{q.q}</p>
+      </Card>
+      <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:16}}>
+        {q.a.map((opt,i) => {
+          const isCorrect = i === q.c;
+          const isUser = i === cur.user;
+          let bg = C.surface, border = C.border, color = C.text;
+          if (isCorrect) { bg = C.greenBg; border = C.greenBorder; }
+          else if (isUser) { bg = C.redBg; border = C.redBorder; }
+          return (
+            <div key={i} style={{padding:'14px 18px',borderRadius:12,border:`2px solid ${border}`,background:bg,color,fontSize:15,display:'flex',gap:12,alignItems:'flex-start'}}>
+              <span style={{fontWeight:700,flexShrink:0}}>{['A','B','C','D'][i]}.</span>
+              <span style={{flex:1}}>{opt}</span>
+              {isCorrect && <span style={{color:C.green,fontWeight:700}}>✓ Correct</span>}
+              {isUser && !isCorrect && <span style={{color:C.red,fontWeight:700}}>✗ Your answer</span>}
+            </div>
+          );
+        })}
+      </div>
+      <Card style={{background:C.grayLight,marginBottom:16}}>
+        <p style={{fontSize:13,color:C.text,margin:0,lineHeight:1.6}}>
+          <strong>Explanation:</strong> {q.r}
+        </p>
+      </Card>
+      <div style={{display:'flex',justifyContent:'space-between',gap:12}}>
+        <button onClick={() => setIdx(Math.max(0,idx-1))} disabled={idx===0}
+          style={{flex:1,padding:'12px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,color:idx===0?C.muted:C.navy,cursor:idx===0?'default':'pointer',fontSize:14,fontWeight:600}}>
+          ← Previous
+        </button>
+        <button onClick={() => idx < items.length-1 ? setIdx(idx+1) : onBack()}
+          style={{flex:1,padding:'12px',borderRadius:10,border:'none',background:C.navy,color:C.white,cursor:'pointer',fontSize:14,fontWeight:600}}>
+          {idx < items.length - 1 ? 'Next →' : 'Done'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const ModuleHub = ({weakDomains, completedModules, onSelect, onSkip}) => {
+  const C = useC();
+  return (
   <div style={{maxWidth:680,margin:'0 auto',padding:'32px 20px',fontFamily:'system-ui'}}>
     <div style={{textAlign:'center',marginBottom:28}}>
       <h2 style={{fontSize:22,fontWeight:700,color:C.navy,margin:'0 0 6px',fontFamily:'Georgia,serif'}}>Your Study Plan</h2>
@@ -760,9 +894,11 @@ const ModuleHub = ({weakDomains, completedModules, onSelect, onSkip}) => (
       </button>
     </div>
   </div>
-);
+  );
+};
 
 const LearningModule = ({domain, phase, pqIndex, pAnswers, onPAnswer, onBack, onStartPractice, onFinish}) => {
+  const C = useC();
   const mod = MODULES[domain];
   const pq = mod.practice[pqIndex];
   const pSelected = pAnswers[pqIndex];
@@ -800,7 +936,7 @@ const LearningModule = ({domain, phase, pqIndex, pAnswers, onPAnswer, onBack, on
           const isSelected = pSelected === i;
           const showFeedback = pSelected !== undefined;
           const isCorrect = i === pq.c;
-          let bg = C.white, border = C.border, color = C.text;
+          let bg = C.surface, border = C.border, color = C.text;
           if (showFeedback && isCorrect) { bg = C.greenBg; border = C.greenBorder; }
           else if (showFeedback && isSelected && !isCorrect) { bg = C.redBg; border = C.redBorder; }
           else if (isSelected) { bg = C.navyLight; border = C.navy; }
@@ -831,20 +967,233 @@ const LearningModule = ({domain, phase, pqIndex, pAnswers, onPAnswer, onBack, on
   );
 };
 
+const DomainGrid = ({onSelect, getCounts}) => {
+  const C = useC();
+  const groups = { ELA:[], MATH:[], ARTS:[] };
+  Object.keys(MODULES).forEach(d => {
+    const subtest = (PRETEST.find(q => q.d === d) || POSTTEST.find(q => q.d === d) || {}).s || 'ARTS';
+    groups[subtest].push(d);
+  });
+  return (
+    <>
+      {Object.entries(groups).map(([k, domains]) => domains.length === 0 ? null : (
+        <div key={k} style={{marginBottom:18}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.muted,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:8}}>
+            {SUBTESTS[k]?.emoji} {SUBTESTS[k]?.label}
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+            {domains.map(d => {
+              const mod = MODULES[d];
+              const meta = getCounts ? getCounts(d) : null;
+              return (
+                <button key={d} onClick={() => onSelect(d)}
+                  style={{textAlign:'left',padding:'12px 14px',borderRadius:12,border:`1px solid ${C.border}`,background:C.surface,cursor:'pointer',display:'flex',alignItems:'center',gap:10,fontFamily:'system-ui'}}>
+                  <span style={{fontSize:24}}>{mod?.icon || '📘'}</span>
+                  <span style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,color:C.text,lineHeight:1.2}}>{d}</div>
+                    {meta && <div style={{fontSize:11,color:C.muted,marginTop:2}}>{meta}</div>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+};
+
+const Flashcards = ({st, up}) => {
+  const C = useC();
+  if (!st.fcDomain) {
+    return (
+      <div style={{maxWidth:680,margin:'0 auto',padding:'32px 20px',fontFamily:'system-ui'}}>
+        <div style={{textAlign:'center',marginBottom:24}}>
+          <div style={{fontSize:40,marginBottom:8}}>🃏</div>
+          <h2 style={{fontSize:22,fontWeight:700,color:C.navy,margin:'0 0 4px',fontFamily:'Georgia,serif'}}>Flashcards</h2>
+          <p style={{fontSize:14,color:C.muted,margin:0}}>Pick a domain to study key concepts</p>
+        </div>
+        <DomainGrid
+          getCounts={d => `${MODULES[d].concepts.length} concepts`}
+          onSelect={d => {
+            const order = shuffle(MODULES[d].concepts.map((_, i) => i));
+            up({ fcDomain: d, fcOrder: order, fcPos: 0, fcFlipped: false, fcKnown: [] });
+          }}
+        />
+      </div>
+    );
+  }
+
+  const mod = MODULES[st.fcDomain];
+  const order = st.fcOrder.length ? st.fcOrder : mod.concepts.map((_, i) => i);
+  const remaining = order.filter(idx => !st.fcKnown.includes(idx));
+  const allKnown = remaining.length === 0;
+  const safePos = Math.min(st.fcPos, Math.max(0, remaining.length - 1));
+  const conceptIdx = remaining[safePos] ?? order[0];
+  const concept = mod.concepts[conceptIdx];
+  const isKnown = st.fcKnown.includes(conceptIdx);
+
+  const advance = (delta) => {
+    if (remaining.length === 0) return;
+    const next = (safePos + delta + remaining.length) % remaining.length;
+    up({ fcPos: next, fcFlipped: false });
+  };
+
+  return (
+    <div style={{maxWidth:680,margin:'0 auto',padding:'32px 20px',fontFamily:'system-ui'}}>
+      <button onClick={() => up({ fcDomain:null, fcOrder:[], fcPos:0, fcFlipped:false, fcKnown:[] })}
+        style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:14,marginBottom:16,padding:0}}>← Pick another domain</button>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+        <span style={{fontSize:28}}>{mod.icon}</span>
+        <h2 style={{fontSize:20,fontWeight:700,color:C.navy,margin:0,fontFamily:'Georgia,serif'}}>{st.fcDomain}</h2>
+      </div>
+      <p style={{fontSize:12,color:C.muted,margin:'0 0 16px'}}>
+        {allKnown
+          ? `All ${order.length} cards marked known.`
+          : `Card ${safePos + 1} of ${remaining.length} · ${st.fcKnown.length} marked known`}
+      </p>
+
+      {!allKnown && (
+        <div onClick={() => up({ fcFlipped: !st.fcFlipped })}
+          style={{minHeight:240,borderRadius:16,padding:32,marginBottom:16,
+            background:st.fcFlipped ? C.amberBg : C.surface,
+            border:`2px solid ${st.fcFlipped ? C.amberBorder : C.border}`,
+            boxShadow:'0 2px 16px rgba(0,0,0,0.07)',cursor:'pointer',
+            display:'flex',flexDirection:'column',justifyContent:'center'}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.muted,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:12}}>
+            {st.fcFlipped ? 'Detail' : 'Concept'} · tap to flip
+          </div>
+          {!st.fcFlipped
+            ? <div style={{fontSize:22,fontWeight:700,color:C.navy,fontFamily:'Georgia,serif',lineHeight:1.3}}>{concept.title}</div>
+            : <div style={{fontSize:15,color:C.text,lineHeight:1.7}}>{concept.body}</div>}
+        </div>
+      )}
+
+      {allKnown && (
+        <Card style={{marginBottom:16,textAlign:'center'}}>
+          <div style={{fontSize:36,marginBottom:8}}>🎉</div>
+          <p style={{fontSize:15,color:C.text,margin:0}}>You've marked every card known. Reset the deck or pick a new domain.</p>
+        </Card>
+      )}
+
+      <div style={{display:'flex',gap:8,marginBottom:10}}>
+        <button onClick={() => advance(-1)} disabled={allKnown}
+          style={{flex:1,padding:'12px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,color:allKnown?C.muted:C.navy,cursor:allKnown?'default':'pointer',fontSize:14,fontWeight:600}}>← Prev</button>
+        <button onClick={() => up({ fcFlipped: !st.fcFlipped })} disabled={allKnown}
+          style={{flex:1,padding:'12px',borderRadius:10,border:'none',background:allKnown?C.gray:C.navy,color:C.white,cursor:allKnown?'default':'pointer',fontSize:14,fontWeight:700}}>Flip</button>
+        <button onClick={() => advance(1)} disabled={allKnown}
+          style={{flex:1,padding:'12px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,color:allKnown?C.muted:C.navy,cursor:allKnown?'default':'pointer',fontSize:14,fontWeight:600}}>Next →</button>
+      </div>
+
+      <div style={{display:'flex',gap:8}}>
+        <button
+          onClick={() => {
+            if (allKnown) return;
+            const nextKnown = isKnown ? st.fcKnown.filter(i => i !== conceptIdx) : [...st.fcKnown, conceptIdx];
+            up({ fcKnown: nextKnown, fcFlipped: false, fcPos: 0 });
+          }}
+          disabled={allKnown}
+          style={{flex:2,padding:'12px',borderRadius:10,border:`1px solid ${isKnown?C.green:C.border}`,background:isKnown?C.greenBg:C.surface,color:isKnown?C.green:C.text,cursor:allKnown?'default':'pointer',fontSize:13,fontWeight:700}}>
+          {isKnown ? '✓ Marked known (tap to unmark)' : 'Mark known'}
+        </button>
+        <button onClick={() => up({ fcOrder: shuffle(order), fcPos: 0, fcFlipped: false })}
+          style={{flex:1,padding:'12px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,color:C.navy,cursor:'pointer',fontSize:13,fontWeight:700}}>🔀 Shuffle</button>
+        <button onClick={() => up({ fcKnown: [], fcPos: 0, fcFlipped: false })}
+          style={{flex:1,padding:'12px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,color:C.muted,cursor:'pointer',fontSize:13,fontWeight:700}}>↺ Reset deck</button>
+      </div>
+    </div>
+  );
+};
+
+const QuizPicker = ({pool, onStart}) => {
+  const C = useC();
+  const [len, setLen] = useState(10);
+  return (
+    <div style={{maxWidth:680,margin:'0 auto',padding:'32px 20px',fontFamily:'system-ui'}}>
+      <div style={{textAlign:'center',marginBottom:20}}>
+        <div style={{fontSize:40,marginBottom:8}}>⚡</div>
+        <h2 style={{fontSize:22,fontWeight:700,color:C.navy,margin:'0 0 4px',fontFamily:'Georgia,serif'}}>Quick Quiz</h2>
+        <p style={{fontSize:14,color:C.muted,margin:0}}>Pick a domain and quiz length</p>
+      </div>
+      <div style={{display:'flex',gap:8,marginBottom:18,justifyContent:'center'}}>
+        {[5, 10].map(n => (
+          <button key={n} onClick={() => setLen(n)}
+            style={{padding:'10px 22px',borderRadius:10,border:`2px solid ${len===n?C.navy:C.border}`,background:len===n?C.navyLight:C.surface,color:len===n?C.navy:C.text,fontSize:14,fontWeight:700,cursor:'pointer'}}>
+            {n} questions
+          </button>
+        ))}
+      </div>
+      <DomainGrid
+        getCounts={d => `${pool[d]?.length || 0} questions in pool`}
+        onSelect={d => {
+          const available = pool[d] || [];
+          if (available.length === 0) return;
+          const take = Math.min(len, available.length);
+          onStart(d, len, shuffle(available).slice(0, take));
+        }}
+      />
+    </div>
+  );
+};
+
+const QuizResults = ({domain, qs, answers, onRetry, onPick}) => {
+  const C = useC();
+  const [reviewing, setReviewing] = useState(false);
+  const correct = qs.filter((q, i) => answers[i] === q.c).length;
+  const p = pct(correct, qs.length);
+  const missed = qs.map((q, i) => ({ q, i, user: answers[i] })).filter(x => x.user !== x.q.c);
+
+  if (reviewing && missed.length > 0) {
+    return <ReviewIncorrect items={missed} onBack={() => setReviewing(false)}/>;
+  }
+
+  return (
+    <div style={{maxWidth:680,margin:'0 auto',padding:'32px 20px',fontFamily:'system-ui'}}>
+      <div style={{textAlign:'center',marginBottom:24}}>
+        <div style={{fontSize:48,marginBottom:8}}>{p >= 70 ? '🎉' : '📊'}</div>
+        <h2 style={{fontSize:22,fontWeight:700,color:C.navy,margin:'0 0 4px',fontFamily:'Georgia,serif'}}>{domain} Quiz</h2>
+        <p style={{fontSize:15,color:C.muted,margin:0}}>
+          Score: <strong style={{color:p>=70?C.green:C.red}}>{p}%</strong> ({correct}/{qs.length})
+        </p>
+      </div>
+      {missed.length > 0 && (
+        <button onClick={() => setReviewing(true)}
+          style={{width:'100%',padding:'14px',background:C.surface,color:C.navy,border:`2px solid ${C.navy}`,borderRadius:12,fontSize:15,fontWeight:700,cursor:'pointer',fontFamily:'Georgia,serif',marginBottom:10}}>
+          🔍 Review Missed Questions ({missed.length})
+        </button>
+      )}
+      <button onClick={onRetry}
+        style={{width:'100%',padding:'14px',background:C.navy,color:C.white,border:'none',borderRadius:12,fontSize:15,fontWeight:700,cursor:'pointer',fontFamily:'Georgia,serif',marginBottom:10}}>
+        Retry this quiz
+      </button>
+      <button onClick={onPick}
+        style={{width:'100%',padding:'14px',background:C.surface,color:C.text,border:`1px solid ${C.border}`,borderRadius:12,fontSize:15,fontWeight:700,cursor:'pointer',fontFamily:'Georgia,serif'}}>
+        ← Pick another domain
+      </button>
+    </div>
+  );
+};
+
 const NAV_ITEMS=[
-  {id:'welcome', label:'Home',      emoji:'\ud83c\udfe0', always:true},
-  {id:'pretest', label:'Pretest',   emoji:'\ud83d\udcdd', always:true},
-  {id:'results', label:'Results',   emoji:'\ud83d\udcca', needs:'pretestScores'},
-  {id:'modules', label:'Study',     emoji:'\ud83d\udcda', needs:'pretestScores'},
-  {id:'posttest',label:'Post-Test', emoji:'\ud83c\udfc1', needs:'pretestScores'},
-  {id:'comparison',label:'Report',  emoji:'\ud83d\udcc8', needs:'postScores'},
+  {id:'welcome',    label:'Home',      emoji:'\ud83c\udfe0', always:true},
+  {id:'flashcards', label:'Cards',     emoji:'\ud83c\udccf', always:true},
+  {id:'quiz',       label:'Quiz',      emoji:'\u26a1',       always:true},
+  {id:'pretest',    label:'Pretest',   emoji:'\ud83d\udcdd', always:true},
+  {id:'results',    label:'Results',   emoji:'\ud83d\udcca', needs:'pretestScores'},
+  {id:'modules',    label:'Study',     emoji:'\ud83d\udcda', needs:'pretestScores'},
+  {id:'posttest',   label:'Post-Test', emoji:'\ud83c\udfc1', needs:'pretestScores'},
+  {id:'comparison', label:'Report',    emoji:'\ud83d\udcc8', needs:'postScores'},
 ];
 
 const NavBar=({st,onNav,onReset,onConfirmReset,onCancelReset})=>{
-  const active=st.phase==='module'?'modules':st.phase;
+  const C = useC();
+  const { dark, toggle } = useTheme();
+  const active = st.phase==='module' ? 'modules'
+    : st.phase==='quizPicker' || st.phase==='quizRun' || st.phase==='quizDone' ? 'quiz'
+    : st.phase;
   return(
-    <div style={{background:C.navy,position:'sticky',top:0,zIndex:200,boxShadow:'0 2px 8px rgba(0,0,0,0.25)'}}>
-      <div style={{maxWidth:700,margin:'0 auto',padding:'0 12px',display:'flex',alignItems:'center',justifyContent:'space-between',height:48}}>
+    <div style={{background:C.navBg,position:'sticky',top:0,zIndex:200,boxShadow:'0 2px 8px rgba(0,0,0,0.25)'}}>
+      <div style={{maxWidth:760,margin:'0 auto',padding:'0 12px',display:'flex',alignItems:'center',justifyContent:'space-between',height:48}}>
         <div style={{display:'flex',gap:2,overflowX:'auto',scrollbarWidth:'none'}}>
           {NAV_ITEMS.map(item=>{
             const avail=item.always||!!st[item.needs];
@@ -852,8 +1201,8 @@ const NavBar=({st,onNav,onReset,onConfirmReset,onCancelReset})=>{
             return(
               <button key={item.id} onClick={()=>avail&&onNav(item.id)} disabled={!avail}
                 style={{padding:'5px 9px',borderRadius:7,border:'none',whiteSpace:'nowrap',
-                  background:isActive?C.white:'transparent',
-                  color:isActive?C.navy:avail?'#93c5fd':'#2d4a63',
+                  background:isActive?C.surface:'transparent',
+                  color:isActive?C.navActiveText:avail?C.navInactive:C.navDisabled,
                   cursor:avail?'pointer':'default',
                   fontSize:11,fontWeight:700,fontFamily:'system-ui',transition:'all 0.15s',outline:'none'}}>
                 {item.emoji} {item.label}
@@ -861,13 +1210,17 @@ const NavBar=({st,onNav,onReset,onConfirmReset,onCancelReset})=>{
             );
           })}
         </div>
-        <div style={{flexShrink:0,marginLeft:8}}>
+        <div style={{flexShrink:0,marginLeft:8,display:'flex',gap:6,alignItems:'center'}}>
+          <button onClick={toggle} aria-label="Toggle theme"
+            style={{padding:'4px 8px',borderRadius:7,border:`1px solid ${C.navBorder}`,background:'transparent',color:C.navInactive,cursor:'pointer',fontSize:13,fontWeight:700,fontFamily:'system-ui'}}>
+            {dark ? '\u2600\ufe0f' : '\ud83c\udf19'}
+          </button>
           {!st.confirmReset
-            ?<button onClick={onReset} style={{padding:'4px 10px',borderRadius:7,border:'1px solid #2d4a63',background:'transparent',color:'#f87171',cursor:'pointer',fontSize:11,fontWeight:700,fontFamily:'system-ui',whiteSpace:'nowrap'}}> Reset</button>
+            ?<button onClick={onReset} style={{padding:'4px 10px',borderRadius:7,border:`1px solid ${C.navBorder}`,background:'transparent',color:C.resetText,cursor:'pointer',fontSize:11,fontWeight:700,fontFamily:'system-ui',whiteSpace:'nowrap'}}>Reset</button>
             :<div style={{display:'flex',gap:4,alignItems:'center'}}>
-               <span style={{fontSize:10,color:'#fca5a5',fontFamily:'system-ui',whiteSpace:'nowrap'}}>Start over?</span>
-               <button onClick={onConfirmReset} style={{padding:'3px 8px',borderRadius:6,border:'none',background:'#dc2626',color:C.white,cursor:'pointer',fontSize:10,fontWeight:700,fontFamily:'system-ui'}}>Yes</button>
-               <button onClick={onCancelReset} style={{padding:'3px 8px',borderRadius:6,border:'1px solid #2d4a63',background:'transparent',color:'#94a3b8',cursor:'pointer',fontSize:10,fontWeight:700,fontFamily:'system-ui'}}>No</button>
+               <span style={{fontSize:10,color:C.resetLabel,fontFamily:'system-ui',whiteSpace:'nowrap'}}>Start over?</span>
+               <button onClick={onConfirmReset} style={{padding:'3px 8px',borderRadius:6,border:'none',background:C.resetYesBg,color:'#ffffff',cursor:'pointer',fontSize:10,fontWeight:700,fontFamily:'system-ui'}}>Yes</button>
+               <button onClick={onCancelReset} style={{padding:'3px 8px',borderRadius:6,border:`1px solid ${C.navBorder}`,background:'transparent',color:C.resetNoText,cursor:'pointer',fontSize:10,fontWeight:700,fontFamily:'system-ui'}}>No</button>
              </div>}
         </div>
       </div>
@@ -875,71 +1228,160 @@ const NavBar=({st,onNav,onReset,onConfirmReset,onCancelReset})=>{
   );
 };
 
-export default function App(){
-  const[st,setSt]=useState({...INITIAL_STATE,posttestStarted:false,confirmReset:false});
-  const up=(patch)=>setSt(p=>({...p,...patch}));
-  const weak=st.pretestScores?Object.entries(st.pretestScores.domains).filter(([,v])=>pct(v.correct,v.total)<70).map(([d])=>d):[];
+export default function App() {
+  const [dark, setDark] = useState(() => {
+    try { return localStorage.getItem('cst-theme') === 'dark'; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('cst-theme', dark ? 'dark' : 'light'); } catch {}
+  }, [dark]);
+  const C = dark ? DARK : LIGHT;
+  const ctx = { C, dark, toggle: () => setDark(d => !d) };
+  return (
+    <ThemeContext.Provider value={ctx}>
+      <AppContent/>
+    </ThemeContext.Provider>
+  );
+}
 
-  const handleNav=(id)=>{
-    const m={
-      welcome:()=>up({phase:'welcome',confirmReset:false}),
-      pretest:()=>up({phase:'pretest',confirmReset:false}),
-      results:()=>st.pretestScores&&up({phase:'results',confirmReset:false}),
-      modules:()=>st.pretestScores&&up({phase:'modules',confirmReset:false}),
-      posttest:()=>st.pretestScores&&up({phase:'posttest',confirmReset:false}),
-      comparison:()=>st.postScores&&up({phase:'comparison',confirmReset:false}),
+function AppContent() {
+  const C = useC();
+  const QUIZ_POOL = useMemo(() => buildQuizPool(), []);
+  const [st, setSt] = useState({ ...INITIAL_STATE, posttestStarted:false, confirmReset:false, pretestAnswers:{}, posttestAnswers:{} });
+  const up = (patch) => setSt(p => ({ ...p, ...patch }));
+  const weak = st.pretestScores ? Object.entries(st.pretestScores.domains).filter(([,v]) => pct(v.correct,v.total) < 70).map(([d]) => d) : [];
+
+  const handleNav = (id) => {
+    const m = {
+      welcome:    () => up({ phase:'welcome',    confirmReset:false }),
+      flashcards: () => up({ phase:'flashcards', confirmReset:false }),
+      quiz:       () => up({ phase:'quizPicker', confirmReset:false, quizDomain:null, quizQs:null, quizIdx:0, quizAnswers:{} }),
+      pretest:    () => up({ phase:'pretest',    confirmReset:false }),
+      results:    () => st.pretestScores && up({ phase:'results',    confirmReset:false }),
+      modules:    () => st.pretestScores && up({ phase:'modules',    confirmReset:false }),
+      posttest:   () => st.pretestScores && up({ phase:'posttest',   confirmReset:false }),
+      comparison: () => st.postScores    && up({ phase:'comparison', confirmReset:false }),
     };
     m[id]?.();
   };
 
-  const nav=(<NavBar st={st} onNav={handleNav}
-    onReset={()=>up({confirmReset:true})}
-    onConfirmReset={()=>setSt({...INITIAL_STATE,posttestStarted:false,confirmReset:false})}
-    onCancelReset={()=>up({confirmReset:false})}/>);
-
-  if(st.phase==='welcome')return(<div>{nav}<Welcome onStart={()=>up({phase:'pretest',qIndex:0,answers:{}})}/></div>);
-
-  if(st.phase==='pretest')return(<div>{nav}<QuestionScreen questions={PRETEST} answers={st.answers} qIndex={st.qIndex}
-    onAnswer={(i,a)=>up({answers:{...st.answers,[i]:a}})}
-    onNav={(d)=>up({qIndex:Math.max(0,Math.min(PRETEST.length-1,st.qIndex+d))})}
-    onSubmit={()=>{const s=calcScores(PRETEST,st.answers);up({phase:'results',pretestScores:s});}}
-    phase="Pretest"/></div>);
-
-  if(st.phase==='results')return(<div>{nav}<Results scores={st.pretestScores} weakDomains={weak} onContinue={()=>up({phase:'modules'})}/></div>);
-
-  if(st.phase==='modules')return(<div>{nav}<ModuleHub weakDomains={weak} completedModules={st.completedModules}
-    onSelect={(d)=>up({phase:'module',activeModule:d,modPhase:'content',modPQIndex:0,modPAnswers:{}})}
-    onSkip={()=>up({phase:'posttest',posttestStarted:false})}/></div>);
-
-  if(st.phase==='module')return(<div>{nav}<LearningModule domain={st.activeModule} phase={st.modPhase}
-    pqIndex={st.modPQIndex} pAnswers={st.modPAnswers}
-    onBack={()=>up({phase:'modules'})}
-    onStartPractice={()=>up({modPhase:'practice'})}
-    onPAnswer={(i,a)=>{if(i==='next'){up({modPQIndex:st.modPQIndex+1});return;}up({modPAnswers:{...st.modPAnswers,[i]:a}});}}
-    onFinish={()=>up({phase:'modules',completedModules:[...new Set([...st.completedModules,st.activeModule])]})}/></div>);
-
-  if(st.phase==='posttest')return(
-    <div>{nav}
-      {!st.posttestStarted
-        ?<div style={{maxWidth:660,margin:'0 auto',padding:'48px 20px',textAlign:'center',fontFamily:'system-ui'}}>
-           <div style={{fontSize:48,marginBottom:12}}>🏁</div>
-           <h2 style={{fontSize:22,fontWeight:700,color:C.navy,fontFamily:'Georgia,serif',marginBottom:8}}>Time for the Post-Test</h2>
-           <p style={{fontSize:15,color:C.muted,marginBottom:28,lineHeight:1.6}}>32 questions · Same domains · Fresh questions<br/>Let's see how much you've grown.</p>
-           <button onClick={()=>up({posttestStarted:true,answers:{},qIndex:0})}
-             style={{padding:'14px 36px',background:C.navy,color:C.white,border:'none',borderRadius:12,fontSize:15,fontWeight:700,cursor:'pointer',fontFamily:'Georgia,serif'}}>
-             Start Post-Test →
-           </button>
-         </div>
-        :<QuestionScreen questions={POSTTEST} answers={st.answers} qIndex={st.qIndex}
-           onAnswer={(i,a)=>up({answers:{...st.answers,[i]:a}})}
-           onNav={(d)=>up({qIndex:Math.max(0,Math.min(POSTTEST.length-1,st.qIndex+d))})}
-           onSubmit={()=>{const s=calcScores(POSTTEST,st.answers);up({phase:'comparison',postScores:s});}}
-           phase="Post-Test"/>}
-    </div>
+  const nav = (
+    <NavBar st={st} onNav={handleNav}
+      onReset={() => up({ confirmReset:true })}
+      onConfirmReset={() => setSt({ ...INITIAL_STATE, posttestStarted:false, confirmReset:false, pretestAnswers:{}, posttestAnswers:{} })}
+      onCancelReset={() => up({ confirmReset:false })}/>
   );
 
-  if(st.phase==='comparison')return(<div>{nav}<Results scores={st.postScores} weakDomains={[]} pretestScores={st.pretestScores}
-    isPost={true} onContinue={()=>setSt({...INITIAL_STATE,posttestStarted:false,confirmReset:false})}/></div>);
+  const Page = ({ children }) => (
+    <div style={{ background:C.bg, minHeight:'100vh', color:C.text }}>{nav}{children}</div>
+  );
+
+  if (st.phase === 'welcome') return (
+    <Page><Welcome onStart={() => up({ phase:'pretest', qIndex:0, answers:{} })}/></Page>
+  );
+
+  if (st.phase === 'flashcards') return (
+    <Page><Flashcards st={st} up={up}/></Page>
+  );
+
+  if (st.phase === 'quizPicker') return (
+    <Page>
+      <QuizPicker pool={QUIZ_POOL} onStart={(domain, len, qs) => up({
+        phase:'quizRun', quizDomain:domain, quizLen:len, quizQs:qs, quizIdx:0, quizAnswers:{},
+      })}/>
+    </Page>
+  );
+
+  if (st.phase === 'quizRun' && st.quizQs) return (
+    <Page>
+      <QuestionScreen questions={st.quizQs} answers={st.quizAnswers} qIndex={st.quizIdx}
+        onAnswer={(i,a) => up({ quizAnswers: { ...st.quizAnswers, [i]:a } })}
+        onNav={(d) => up({ quizIdx: Math.max(0, Math.min(st.quizQs.length - 1, st.quizIdx + d)) })}
+        onSubmit={() => up({ phase:'quizDone' })}
+        phase={`${st.quizDomain} Quiz`}/>
+    </Page>
+  );
+
+  if (st.phase === 'quizDone' && st.quizQs) return (
+    <Page>
+      <QuizResults domain={st.quizDomain} qs={st.quizQs} answers={st.quizAnswers}
+        onRetry={() => up({ phase:'quizRun', quizQs: shuffle(st.quizQs), quizIdx:0, quizAnswers:{} })}
+        onPick={() => up({ phase:'quizPicker', quizDomain:null, quizQs:null, quizIdx:0, quizAnswers:{} })}/>
+    </Page>
+  );
+
+  if (st.phase === 'pretest') return (
+    <Page>
+      <QuestionScreen questions={PRETEST} answers={st.answers} qIndex={st.qIndex}
+        onAnswer={(i,a) => up({ answers: { ...st.answers, [i]:a } })}
+        onNav={(d) => up({ qIndex: Math.max(0, Math.min(PRETEST.length - 1, st.qIndex + d)) })}
+        onSubmit={() => {
+          const s = calcScores(PRETEST, st.answers);
+          up({ phase:'results', pretestScores:s, pretestAnswers:{ ...st.answers } });
+        }}
+        phase="Pretest"/>
+    </Page>
+  );
+
+  if (st.phase === 'results') return (
+    <Page>
+      <Results scores={st.pretestScores} weakDomains={weak}
+        sourceQuestions={PRETEST} sourceAnswers={st.pretestAnswers}
+        onContinue={() => up({ phase:'modules' })}/>
+    </Page>
+  );
+
+  if (st.phase === 'modules') return (
+    <Page>
+      <ModuleHub weakDomains={weak} completedModules={st.completedModules}
+        onSelect={(d) => up({ phase:'module', activeModule:d, modPhase:'content', modPQIndex:0, modPAnswers:{} })}
+        onSkip={() => up({ phase:'posttest', posttestStarted:false })}/>
+    </Page>
+  );
+
+  if (st.phase === 'module') return (
+    <Page>
+      <LearningModule domain={st.activeModule} phase={st.modPhase}
+        pqIndex={st.modPQIndex} pAnswers={st.modPAnswers}
+        onBack={() => up({ phase:'modules' })}
+        onStartPractice={() => up({ modPhase:'practice' })}
+        onPAnswer={(i,a) => { if (i === 'next') { up({ modPQIndex: st.modPQIndex + 1 }); return; } up({ modPAnswers: { ...st.modPAnswers, [i]:a } }); }}
+        onFinish={() => up({ phase:'modules', completedModules: [...new Set([...st.completedModules, st.activeModule])] })}/>
+    </Page>
+  );
+
+  if (st.phase === 'posttest') return (
+    <Page>
+      {!st.posttestStarted
+        ? <div style={{maxWidth:660,margin:'0 auto',padding:'48px 20px',textAlign:'center',fontFamily:'system-ui'}}>
+            <div style={{fontSize:48,marginBottom:12}}>🏁</div>
+            <h2 style={{fontSize:22,fontWeight:700,color:C.navy,fontFamily:'Georgia,serif',marginBottom:8}}>Time for the Post-Test</h2>
+            <p style={{fontSize:15,color:C.muted,marginBottom:28,lineHeight:1.6}}>32 questions · Same domains · Fresh questions<br/>Let's see how much you've grown.</p>
+            <button onClick={() => up({ posttestStarted:true, answers:{}, qIndex:0 })}
+              style={{padding:'14px 36px',background:C.navy,color:C.white,border:'none',borderRadius:12,fontSize:15,fontWeight:700,cursor:'pointer',fontFamily:'Georgia,serif'}}>
+              Start Post-Test →
+            </button>
+          </div>
+        : <QuestionScreen questions={POSTTEST} answers={st.answers} qIndex={st.qIndex}
+            onAnswer={(i,a) => up({ answers: { ...st.answers, [i]:a } })}
+            onNav={(d) => up({ qIndex: Math.max(0, Math.min(POSTTEST.length - 1, st.qIndex + d)) })}
+            onSubmit={() => {
+              const s = calcScores(POSTTEST, st.answers);
+              up({ phase:'comparison', postScores:s, posttestAnswers:{ ...st.answers } });
+            }}
+            phase="Post-Test"/>}
+    </Page>
+  );
+
+  if (st.phase === 'comparison') return (
+    <Page>
+      <Results scores={st.postScores} weakDomains={[]} pretestScores={st.pretestScores}
+        isPost={true}
+        sourceQuestions={POSTTEST} sourceAnswers={st.posttestAnswers}
+        onContinue={() => setSt({ ...INITIAL_STATE, posttestStarted:false, confirmReset:false, pretestAnswers:{}, posttestAnswers:{} })}/>
+    </Page>
+  );
 
   return null;
 }
