@@ -576,6 +576,31 @@ const INITIAL_STATE = {
   quizAnswers:{},
 };
 
+// ─── PROGRESS STORAGE ──────────────────────────────────────
+const PROGRESS_KEY = 'cst-progress-v1';
+const loadProgress = () => {
+  try {
+    const raw = localStorage.getItem(PROGRESS_KEY);
+    if (!raw) return { attempts: [] };
+    const p = JSON.parse(raw);
+    return { attempts: Array.isArray(p?.attempts) ? p.attempts : [] };
+  } catch { return { attempts: [] }; }
+};
+const saveProgress = (p) => {
+  try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(p)); } catch {}
+};
+const recordAttempt = (type, questions, answers, extra = {}) => {
+  const items = questions.map((q, i) => ({ s: q.s, d: q.d, correct: answers[i] === q.c }));
+  const p = loadProgress();
+  p.attempts.push({ ts: Date.now(), type, items, ...extra });
+  if (p.attempts.length > 500) p.attempts = p.attempts.slice(-500);
+  saveProgress(p);
+};
+const dayKey = (ts) => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+
 // ─── COMPONENTS ────────────────────────────────────────────
 
 const ProgressBar = ({ value, color, label }) => {
@@ -1174,8 +1199,203 @@ const QuizResults = ({domain, qs, answers, onRetry, onPick}) => {
   );
 };
 
+const Dashboard = ({ onQuizDomain, onNav, version }) => {
+  const C = useC();
+  const data = useMemo(() => loadProgress(), [version]);
+  const attempts = data.attempts;
+
+  if (attempts.length === 0) {
+    return (
+      <div style={{maxWidth:680,margin:'0 auto',padding:'32px 20px',fontFamily:'system-ui'}}>
+        <div style={{textAlign:'center',marginBottom:24}}>
+          <div style={{fontSize:40,marginBottom:8}}>🎯</div>
+          <h2 style={{fontSize:22,fontWeight:700,color:C.navy,margin:'0 0 4px',fontFamily:'Georgia,serif'}}>Progress</h2>
+          <p style={{fontSize:14,color:C.muted,margin:0}}>No activity yet — take the pretest or a quick quiz to start tracking.</p>
+        </div>
+        <Card style={{textAlign:'center'}}>
+          <p style={{fontSize:14,color:C.text,margin:'0 0 16px'}}>Your scores from every pretest, post-test, and quiz will appear here.</p>
+          <div style={{display:'flex',gap:10,justifyContent:'center',flexWrap:'wrap'}}>
+            <button onClick={() => onNav('pretest')}
+              style={{padding:'10px 20px',background:C.navy,color:C.white,border:'none',borderRadius:10,fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'Georgia,serif'}}>
+              Take Pretest →
+            </button>
+            <button onClick={() => onNav('quiz')}
+              style={{padding:'10px 20px',background:C.surface,color:C.navy,border:`2px solid ${C.navy}`,borderRadius:10,fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'Georgia,serif'}}>
+              Quick Quiz →
+            </button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  const allItems = attempts.flatMap(a => a.items);
+  const totalQ = allItems.length;
+  const totalCorrect = allItems.filter(x => x.correct).length;
+  const overall = pct(totalCorrect, totalQ);
+
+  const days = new Set(attempts.map(a => dayKey(a.ts)));
+  let streak = 0;
+  const cursor = new Date();
+  cursor.setHours(0,0,0,0);
+  while (days.has(dayKey(cursor.getTime()))) {
+    streak++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  const bySubtest = {};
+  allItems.forEach(it => {
+    const row = bySubtest[it.s] || (bySubtest[it.s] = { c:0, t:0 });
+    row.t++; if (it.correct) row.c++;
+  });
+
+  const byDomain = {};
+  allItems.forEach(it => {
+    const row = byDomain[it.d] || (byDomain[it.d] = { c:0, t:0, s:it.s });
+    row.t++; if (it.correct) row.c++;
+  });
+  const domainList = Object.entries(byDomain)
+    .map(([d, v]) => ({ d, ...v, p: pct(v.c, v.t) }))
+    .sort((a, b) => a.p - b.p);
+  const weakest = domainList.filter(x => x.t >= 3).slice(0, 3);
+
+  const heat = [];
+  let maxCount = 0;
+  for (let i = 13; i >= 0; i--) {
+    const dt = new Date();
+    dt.setHours(0,0,0,0);
+    dt.setDate(dt.getDate() - i);
+    const key = dayKey(dt.getTime());
+    const count = attempts
+      .filter(a => dayKey(a.ts) === key)
+      .reduce((sum, a) => sum + a.items.length, 0);
+    if (count > maxCount) maxCount = count;
+    heat.push({ date: dt, count, key });
+  }
+
+  const recent = attempts.slice(-5).reverse();
+
+  return (
+    <div style={{maxWidth:680,margin:'0 auto',padding:'32px 20px',fontFamily:'system-ui'}}>
+      <div style={{textAlign:'center',marginBottom:24}}>
+        <div style={{fontSize:40,marginBottom:8}}>🎯</div>
+        <h2 style={{fontSize:22,fontWeight:700,color:C.navy,margin:'0 0 4px',fontFamily:'Georgia,serif'}}>Progress</h2>
+        <p style={{fontSize:14,color:C.muted,margin:0}}>Lifetime stats across every pretest, post-test, and quiz</p>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:18}}>
+        <Card style={{textAlign:'center',padding:16}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.muted,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:4}}>Accuracy</div>
+          <div style={{fontSize:26,fontWeight:700,color:overall>=70?C.green:overall>=50?C.amber:C.red,fontFamily:'Georgia,serif'}}>{overall}%</div>
+          <div style={{fontSize:11,color:C.muted,marginTop:2}}>{totalCorrect}/{totalQ} correct</div>
+        </Card>
+        <Card style={{textAlign:'center',padding:16}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.muted,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:4}}>Streak</div>
+          <div style={{fontSize:26,fontWeight:700,color:C.amber,fontFamily:'Georgia,serif'}}>{streak} {streak===1?'day':'days'}</div>
+          <div style={{fontSize:11,color:C.muted,marginTop:2}}>{streak>0?'🔥 keep it going':'Study today to start'}</div>
+        </Card>
+        <Card style={{textAlign:'center',padding:16}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.muted,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:4}}>Sessions</div>
+          <div style={{fontSize:26,fontWeight:700,color:C.navy,fontFamily:'Georgia,serif'}}>{attempts.length}</div>
+          <div style={{fontSize:11,color:C.muted,marginTop:2}}>{days.size} active {days.size===1?'day':'days'}</div>
+        </Card>
+      </div>
+
+      <Card style={{marginBottom:18}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.navy,margin:'0 0 16px'}}>Accuracy by Subtest</h3>
+        {Object.entries(SUBTESTS).map(([k, v]) => {
+          const row = bySubtest[k];
+          if (!row) return (
+            <div key={k} style={{marginBottom:12,opacity:0.5}}>
+              <div style={{fontSize:13,color:C.muted}}>{v.emoji} {v.label} — no data yet</div>
+            </div>
+          );
+          const p = pct(row.c, row.t);
+          return (
+            <div key={k} style={{marginBottom:12}}>
+              <ProgressBar value={p} label={`${v.emoji} ${v.label} (${row.c}/${row.t})`}
+                color={p>=70?C.green:p>=50?C.amber:C.red}/>
+            </div>
+          );
+        })}
+      </Card>
+
+      <Card style={{marginBottom:18}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.navy,margin:'0 0 6px'}}>Weakest Domains</h3>
+        <p style={{fontSize:12,color:C.muted,margin:'0 0 14px'}}>Lowest accuracy across at least 3 questions answered</p>
+        {weakest.length === 0
+          ? <p style={{fontSize:13,color:C.muted,margin:0}}>Answer a few more questions to surface weak spots.</p>
+          : weakest.map(w => (
+            <div key={w.d} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,padding:'10px 12px',borderRadius:10,background:w.p<70?C.redBg:C.grayLight,border:`1px solid ${w.p<70?C.redBorder:C.border}`,marginBottom:8}}>
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:2}}>{MODULES[w.d]?.icon || '📘'} {w.d}</div>
+                <div style={{fontSize:11,color:C.muted}}>{w.c}/{w.t} correct · {w.p}%</div>
+              </div>
+              <button onClick={() => onQuizDomain(w.d)}
+                style={{padding:'8px 14px',borderRadius:8,border:'none',background:C.navy,color:C.white,fontSize:12,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>
+                Quiz me →
+              </button>
+            </div>
+          ))}
+      </Card>
+
+      <Card style={{marginBottom:18}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.navy,margin:'0 0 6px'}}>Last 14 Days</h3>
+        <p style={{fontSize:12,color:C.muted,margin:'0 0 14px'}}>Questions answered per day</p>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(14, 1fr)',gap:4}}>
+          {heat.map(h => {
+            const intensity = maxCount === 0 ? 0 : h.count / maxCount;
+            const bg = h.count === 0
+              ? C.border
+              : `color-mix(in srgb, ${C.navy} ${Math.round(20 + intensity * 80)}%, ${C.surface})`;
+            return (
+              <div key={h.key} title={`${h.key}: ${h.count} question${h.count===1?'':'s'}`}
+                style={{aspectRatio:'1',borderRadius:4,background:bg,border:`1px solid ${C.border}`}}/>
+            );
+          })}
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:6,fontSize:10,color:C.muted}}>
+          <span>{heat[0].key.slice(5)}</span>
+          <span>today</span>
+        </div>
+      </Card>
+
+      <Card style={{marginBottom:18}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.navy,margin:'0 0 14px'}}>Recent Activity</h3>
+        {recent.map((a, i) => {
+          const correct = a.items.filter(x => x.correct).length;
+          const p = pct(correct, a.items.length);
+          const label = a.type === 'quiz' ? `${a.domain || 'Quiz'} quiz` : a.type === 'pretest' ? 'Pretest' : 'Post-test';
+          const when = new Date(a.ts).toLocaleDateString(undefined, { month:'short', day:'numeric' });
+          return (
+            <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:i<recent.length-1?`1px solid ${C.border}`:'none'}}>
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.text}}>{label}</div>
+                <div style={{fontSize:11,color:C.muted}}>{when} · {correct}/{a.items.length}</div>
+              </div>
+              <span style={{fontSize:13,fontWeight:700,color:p>=70?C.green:p>=50?C.amber:C.red}}>{p}%</span>
+            </div>
+          );
+        })}
+      </Card>
+
+      <button
+        onClick={() => {
+          if (typeof window !== 'undefined' && window.confirm('Clear all saved progress? This cannot be undone.')) {
+            saveProgress({ attempts: [] });
+            onNav('progress-refresh');
+          }
+        }}
+        style={{width:'100%',padding:'12px',background:'transparent',color:C.muted,border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,fontWeight:600,cursor:'pointer'}}>
+        Clear progress data
+      </button>
+    </div>
+  );
+};
+
 const NAV_ITEMS=[
   {id:'welcome',    label:'Home',      emoji:'\ud83c\udfe0', always:true},
+  {id:'progress',   label:'Progress',  emoji:'\ud83c\udfaf', always:true},
   {id:'flashcards', label:'Cards',     emoji:'\ud83c\udccf', always:true},
   {id:'quiz',       label:'Quiz',      emoji:'\u26a1',       always:true},
   {id:'pretest',    label:'Pretest',   emoji:'\ud83d\udcdd', always:true},
@@ -1249,12 +1469,22 @@ function AppContent() {
   const C = useC();
   const QUIZ_POOL = useMemo(() => buildQuizPool(), []);
   const [st, setSt] = useState({ ...INITIAL_STATE, posttestStarted:false, confirmReset:false, pretestAnswers:{}, posttestAnswers:{} });
+  const [progressVer, setProgressVer] = useState(0);
   const up = (patch) => setSt(p => ({ ...p, ...patch }));
   const weak = st.pretestScores ? Object.entries(st.pretestScores.domains).filter(([,v]) => pct(v.correct,v.total) < 70).map(([d]) => d) : [];
 
+  const startQuizForDomain = (d) => {
+    const available = QUIZ_POOL[d] || [];
+    if (available.length === 0) return;
+    const len = Math.min(10, available.length);
+    up({ phase:'quizRun', confirmReset:false, quizDomain:d, quizLen:len, quizQs: shuffle(available).slice(0, len), quizIdx:0, quizAnswers:{} });
+  };
+
   const handleNav = (id) => {
+    if (id === 'progress-refresh') { setProgressVer(v => v + 1); return; }
     const m = {
       welcome:    () => up({ phase:'welcome',    confirmReset:false }),
+      progress:   () => up({ phase:'progress',   confirmReset:false }),
       flashcards: () => up({ phase:'flashcards', confirmReset:false }),
       quiz:       () => up({ phase:'quizPicker', confirmReset:false, quizDomain:null, quizQs:null, quizIdx:0, quizAnswers:{} }),
       pretest:    () => up({ phase:'pretest',    confirmReset:false }),
@@ -1281,6 +1511,12 @@ function AppContent() {
     <Page><Welcome onStart={() => up({ phase:'pretest', qIndex:0, answers:{} })}/></Page>
   );
 
+  if (st.phase === 'progress') return (
+    <Page>
+      <Dashboard version={progressVer} onNav={handleNav} onQuizDomain={startQuizForDomain}/>
+    </Page>
+  );
+
   if (st.phase === 'flashcards') return (
     <Page><Flashcards st={st} up={up}/></Page>
   );
@@ -1298,7 +1534,11 @@ function AppContent() {
       <QuestionScreen questions={st.quizQs} answers={st.quizAnswers} qIndex={st.quizIdx}
         onAnswer={(i,a) => up({ quizAnswers: { ...st.quizAnswers, [i]:a } })}
         onNav={(d) => up({ quizIdx: Math.max(0, Math.min(st.quizQs.length - 1, st.quizIdx + d)) })}
-        onSubmit={() => up({ phase:'quizDone' })}
+        onSubmit={() => {
+          recordAttempt('quiz', st.quizQs, st.quizAnswers, { domain: st.quizDomain });
+          setProgressVer(v => v + 1);
+          up({ phase:'quizDone' });
+        }}
         phase={`${st.quizDomain} Quiz`}/>
     </Page>
   );
@@ -1318,6 +1558,8 @@ function AppContent() {
         onNav={(d) => up({ qIndex: Math.max(0, Math.min(PRETEST.length - 1, st.qIndex + d)) })}
         onSubmit={() => {
           const s = calcScores(PRETEST, st.answers);
+          recordAttempt('pretest', PRETEST, st.answers);
+          setProgressVer(v => v + 1);
           up({ phase:'results', pretestScores:s, pretestAnswers:{ ...st.answers } });
         }}
         phase="Pretest"/>
@@ -1368,6 +1610,8 @@ function AppContent() {
             onNav={(d) => up({ qIndex: Math.max(0, Math.min(POSTTEST.length - 1, st.qIndex + d)) })}
             onSubmit={() => {
               const s = calcScores(POSTTEST, st.answers);
+              recordAttempt('posttest', POSTTEST, st.answers);
+              setProgressVer(v => v + 1);
               up({ phase:'comparison', postScores:s, posttestAnswers:{ ...st.answers } });
             }}
             phase="Post-Test"/>}
