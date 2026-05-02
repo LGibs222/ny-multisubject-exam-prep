@@ -683,7 +683,7 @@ const Welcome = ({ onStart }) => (
         </div>
         {Object.entries(SUBTESTS).map(([k, v], i, arr) => (
           <div key={k} style={{ padding: '18px 0', borderBottom: i < arr.length - 1 ? `1px solid ${T.hairline}` : 'none' }}>
-            <Cap color={T.orange2} mb={5}>Subarea {v.roman}</Cap>
+            <Cap color={T.orange2} mb={5}>Subtest {v.roman}</Cap>
             <h3 style={{ fontFamily: T.serif, fontWeight: 500, fontSize: 21, letterSpacing: '-.005em', lineHeight: 1.2, marginBottom: 5 }}>{v.label}</h3>
           </div>
         ))}
@@ -805,7 +805,7 @@ const Results = ({ scores, weakDomains, onContinue, isPost, pretestScores, sourc
         </div>
       </header>
       <section style={{ marginBottom: 36 }}>
-        <Cap color={T.orange2} mb={14}>— By Subarea</Cap>
+        <Cap color={T.orange2} mb={14}>— By Subtest</Cap>
         {Object.entries(scores.subtests).map(([k, v]) => (
           <ProgressRow key={k} value={pct(v.correct, v.total)} label={`Subtest ${SUBTESTS[k]?.roman} · ${SUBTESTS[k]?.label} (${v.correct}/${v.total})`} color={pct(v.correct, v.total) >= 70 ? T.green : T.red} />
         ))}
