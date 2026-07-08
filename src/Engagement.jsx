@@ -20,7 +20,10 @@ export function QuickCheck({ quickCheck, onRate, color = '#5b21b6' }) {
   return (
     <div style={{
       marginTop: 18,
-      background: `linear-gradient(135deg, ${color}10 0%, ${color}05 100%)`,
+      // solid light base so the fixed dark text stays readable in dark mode
+      // (same "light island" pattern as CategorizeGame and MasteryMap)
+      backgroundColor: '#fdfbf5',
+      backgroundImage: `linear-gradient(135deg, ${color}10 0%, ${color}05 100%)`,
       border: `1.5px solid ${color}40`,
       borderRadius: 12,
       padding: '14px 16px',
