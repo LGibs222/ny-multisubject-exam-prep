@@ -821,6 +821,76 @@ const buildQuizPool = () => {
   return pool;
 };
 
+// ─── ERROR ANALYSIS + READINESS ENGINE ─────────────────────
+// Stable question ids: questions have no id field, so we tag every question
+// object at module load. Pool copies ({...p}) carry the tag along.
+const QUESTION_INDEX = {};
+PRETEST.forEach((q, i) => { q._id = `pre-${i}`; QUESTION_INDEX[q._id] = q; });
+POSTTEST.forEach((q, i) => { q._id = `post-${i}`; QUESTION_INDEX[q._id] = q; });
+Object.entries(MODULES).forEach(([d, mod]) => (mod.practice || []).forEach((p, i) => { p._id = `mod-${d}-${i}`; QUESTION_INDEX[p._id] = p; }));
+
+// domain → subtest (exam part) map, derived from question metadata
+const DOMAIN_SUBTEST = {};
+[...PRETEST, ...POSTTEST].forEach(q => { DOMAIN_SUBTEST[q.d] = q.s; });
+Object.entries(MODULES).forEach(([d, mod]) => { (mod.practice || []).forEach(p => { if (!DOMAIN_SUBTEST[d] && p.s) DOMAIN_SUBTEST[d] = p.s; }); });
+
+const HIST_CAP = 200;   // per-domain answer-event history cap
+const ATTEMPT_CAP = 50; // scored-attempt history cap
+
+// Folds a batch of answer events into domainHistory (chronological 0/1 per
+// domain, for accuracy + early-vs-recent trend) and the missBank
+// ({ id, domain, missCount, correctStreak, lastMissed, retired }).
+// A question retires from the bank only after TWO consecutive correct
+// answers in Review Misses mode; a miss anywhere reactivates it.
+const applyAnswerEvents = (domainHistory, missBank, events, inReview = false) => {
+  const dh = { ...domainHistory }; const mb = { ...missBank };
+  events.forEach(({ q, correct }) => {
+    dh[q.d] = [...(dh[q.d] || []), correct ? 1 : 0].slice(-HIST_CAP);
+    const id = q._id; if (!id) return;
+    if (!correct) {
+      const e = mb[id] || { id, domain: q.d, missCount: 0, correctStreak: 0, lastMissed: null, retired: false };
+      mb[id] = { ...e, missCount: e.missCount + 1, correctStreak: 0, retired: false, lastMissed: new Date().toISOString() };
+    } else if (inReview && mb[id] && !mb[id].retired) {
+      const streak = mb[id].correctStreak + 1;
+      mb[id] = { ...mb[id], correctStreak: streak, retired: streak >= 2 };
+    }
+  });
+  return { domainHistory: dh, missBank: mb };
+};
+
+// {domainKey: pct} breakdown for a scored set (telemetry contract: byDomain)
+const byDomainPct = (questions, answers) => {
+  const acc = {};
+  questions.forEach((q, i) => { (acc[q.d] = acc[q.d] || { c: 0, t: 0 }).t++; if (answers[i] === q.c) acc[q.d].c++; });
+  return Object.fromEntries(Object.entries(acc).map(([d, v]) => [d, pct(v.c, v.t)]));
+};
+const bySubtestPct = (questions, answers) => {
+  const acc = {};
+  questions.forEach((q, i) => { (acc[q.s] = acc[q.s] || { c: 0, t: 0 }).t++; if (answers[i] === q.c) acc[q.s].c++; });
+  return Object.fromEntries(Object.entries(acc).map(([k, v]) => [k, pct(v.c, v.t)]));
+};
+
+// ── Readiness projection ──
+// NYSTCE scaled scores run 400–600; each CST part passes at 520 (see the
+// app's testFacts copy). This app has no scaled-score engine, so we project
+// linearly from percent-correct, anchored so 70% ≈ 520:
+//   scaled = 400 + (pct / 70) × 120, capped at 600.
+// The projected pct is a recency-weighted mean of the last five scored
+// attempts (weights 1..5, most recent heaviest) — recent practice counts
+// most, older attempts fade.
+const PASS_SCALED = 520, SCALE_MIN = 400, SCALE_MAX = 600, ANCHOR_PCT = 70;
+const pctToScaled = (p) => Math.max(SCALE_MIN, Math.min(SCALE_MAX, Math.round(400 + (p / ANCHOR_PCT) * 120)));
+const projectPct = (pcts) => {
+  const last = pcts.slice(-5);
+  if (last.length === 0) return null;
+  let num = 0, den = 0;
+  last.forEach((p, i) => { const w = i + 1; num += p * w; den += w; });
+  return Math.round(num / den);
+};
+// Verdict bands on the percent scale around the 70% pass anchor (±5%):
+// Ready ≥75, Borderline 65–74, Keep building <65.
+const verdictFor = (projPct) => projPct >= ANCHOR_PCT + 5 ? 'Ready' : projPct >= ANCHOR_PCT - 5 ? 'Borderline' : 'Keep building';
+
 const INITIAL_STATE = {
   phase:'welcome', qIndex:0, answers:{}, pretestScores:null, theme:'light',
   completedModules:[], activeModule:null, modPhase:'content', modPQIndex:0, modPAnswers:{},
@@ -829,6 +899,7 @@ const INITIAL_STATE = {
   fcDomain:null, fcOrder:[], fcPos:0, fcFlipped:false, fcKnown:[],
   quizDomain:null, quizLen:10, quizQs:null, quizIdx:0, quizAnswers:{},
   crPromptId: (typeof CR_PROMPTS !== 'undefined' && CR_PROMPTS.length > 0) ? CR_PROMPTS[0].id : null, crView:'prompt', crSelfScore:{},
+  attempts:[], domainHistory:{}, missBank:{},
 };
 
 
@@ -1812,6 +1883,257 @@ const ConstructedResponse = ({ st, up }) => {
   );
 };
 
+// ─── READINESS PROJECTION + ERROR ANALYSIS (My Progress) ───
+// Sparkline of scored-attempt trajectory with the pass bar drawn as a line.
+const AttemptSparkline = ({ attempts }) => {
+  const pts = attempts.slice(-12);
+  const W = 320, H = 84, pad = 6;
+  const bw = Math.min(24, (W - pad * 2) / Math.max(pts.length, 1) - 4);
+  const y = (scaled) => H - pad - ((scaled - SCALE_MIN) / (SCALE_MAX - SCALE_MIN)) * (H - pad * 2);
+  const passY = y(PASS_SCALED);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Trajectory of your last ${pts.length} scored attempts against the 520 pass bar`} style={{ width: '100%', maxWidth: 360, height: 'auto', display: 'block' }}>
+      {pts.map((a, i) => {
+        const scaled = pctToScaled(a.pct);
+        const x = pad + i * ((W - pad * 2) / pts.length) + 2;
+        const top = y(scaled);
+        return <rect key={i} x={x} y={top} width={bw} height={Math.max(2, H - pad - top)} rx={3}
+          fill={scaled >= PASS_SCALED ? 'var(--green)' : 'var(--accent)'} opacity={0.55 + 0.45 * ((i + 1) / pts.length)}>
+          <title>{`${a.kind} · ${a.pct}% (~${scaled} scaled)`}</title>
+        </rect>;
+      })}
+      <line x1={0} x2={W} y1={passY} y2={passY} stroke="var(--red)" strokeWidth={1.5} strokeDasharray="5 4" />
+      <text x={W - 4} y={passY - 4} textAnchor="end" fontSize={9} fontWeight={700} fill="var(--red)" fontFamily="inherit">pass 520</text>
+    </svg>
+  );
+};
+
+const VERDICT_STYLE = {
+  'Ready':         { color: 'var(--green)',  bg: 'var(--green-bg)',  border: 'var(--green-border)' },
+  'Borderline':    { color: 'var(--gold)',   bg: 'var(--accent-bg)', border: 'var(--border)' },
+  'Keep building': { color: 'var(--red)',    bg: 'var(--red-bg)',    border: 'var(--red-border)' },
+};
+
+const ReadinessProjection = ({ attempts }) => {
+  const scored = attempts || [];
+  // overall projection needs ≥2 scored attempts (minimum-data guard)
+  const overallPct2 = scored.length >= 2 ? projectPct(scored.map(a => a.pct)) : null;
+  // per-part: each CST part (221/222/245) passes separately — project each
+  // part from the attempts that touched it, where the domain→part mapping allows
+  const parts = Object.keys(SUBTESTS).map(k => {
+    const pcts = scored.filter(a => a.bySubtest && a.bySubtest[k] != null).map(a => a.bySubtest[k]);
+    return { k, roman: SUBTESTS[k].roman, label: SUBTESTS[k].label, proj: pcts.length >= 2 ? projectPct(pcts) : null, n: pcts.length };
+  });
+  // fire the readiness telemetry event once per render of a projection
+  useEffect(() => {
+    if (overallPct2 != null) track('readiness', { projected: pctToScaled(overallPct2), bar: PASS_SCALED, verdict: verdictFor(overallPct2) });
+  }, []);
+  if (overallPct2 == null) return (
+    <Card style={{ marginBottom: 18 }}>
+      <Cap color={T.orange2} mb={10}>Readiness Projection</Cap>
+      <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, lineHeight: 1.55, margin: 0 }}>Complete more scored practice to unlock your readiness projection. Two or more scored attempts (pretest, quizzes, post-test) are needed.</p>
+    </Card>
+  );
+  const scaled = pctToScaled(overallPct2);
+  const verdict = verdictFor(overallPct2);
+  const vs = VERDICT_STYLE[verdict];
+  return (
+    <Card style={{ marginBottom: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <Cap color={T.orange2}>Readiness Projection</Cap>
+        <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.06em', color: vs.color, background: vs.bg, border: `1px solid ${vs.border}`, padding: '4px 12px', borderRadius: 99, whiteSpace: 'nowrap' }}>{verdict}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+        <span style={{ fontFamily: T.sans, fontSize: 44, fontWeight: 800, color: scaled >= PASS_SCALED ? T.green : T.ink, letterSpacing: '-.02em', lineHeight: 1, fontFeatureSettings: "'tnum' 1" }}>~{scaled}</span>
+        <span style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, fontWeight: 600 }}>projected scaled score · pass = {PASS_SCALED} of {SCALE_MAX} per part · {overallPct2}% weighted accuracy</span>
+      </div>
+      <div style={{ margin: '12px 0 6px' }}><AttemptSparkline attempts={scored} /></div>
+      <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.hairline}` }}>
+        <Cap color={T.muted} mb={8}>By {WELCOME.subareaWord} · each is passed separately</Cap>
+        {parts.map(p => {
+          if (p.proj == null) return (
+            <div key={p.k} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '6px 0', fontFamily: T.sans, fontSize: 13.5 }}>
+              <span style={{ color: T.ink, fontWeight: 600 }}>{WELCOME.subareaWord} {p.roman} · {p.label}</span>
+              <span style={{ color: T.muted, whiteSpace: 'nowrap' }}>more scored practice needed</span>
+            </div>
+          );
+          const pv = verdictFor(p.proj), pvs = VERDICT_STYLE[pv];
+          return (
+            <div key={p.k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '6px 0', fontFamily: T.sans, fontSize: 13.5 }}>
+              <span style={{ color: T.ink, fontWeight: 600, flex: 1 }}>{WELCOME.subareaWord} {p.roman} · {p.label}</span>
+              <strong style={{ color: pvs.color, whiteSpace: 'nowrap', fontFeatureSettings: "'tnum' 1" }}>~{pctToScaled(p.proj)}</strong>
+              <span style={{ fontFamily: T.sans, fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.05em', color: pvs.color, background: pvs.bg, border: `1px solid ${pvs.border}`, padding: '2px 9px', borderRadius: 99, whiteSpace: 'nowrap' }}>{pv}</span>
+            </div>
+          );
+        })}
+      </div>
+      <p style={{ fontFamily: T.sans, fontSize: 11.5, color: T.muted, lineHeight: 1.55, margin: '12px 0 0' }}>Projection based on your practice here (recent attempts weighted most), not a guarantee of passage on the actual examination.</p>
+    </Card>
+  );
+};
+
+// Domain/competency heat map: accuracy across ALL recorded answer events
+// (pretest, post-test, quizzes, review), with early-vs-recent trend and the
+// three weakest domains deep-linked to their study modules. Cells use the
+// solid tinted bases + colored text tokens that pass contrast in both themes,
+// and always print the % number — color is never the only signal.
+const DomainHeatMap = ({ domainHistory, onOpenModule }) => {
+  const rows = Object.keys(MODULES).map(d => {
+    const hist = domainHistory?.[d] || [];
+    const acc = hist.length ? pct(hist.reduce((a, b) => a + b, 0), hist.length) : null;
+    let trend = null;
+    if (hist.length >= 6) {
+      const half = Math.floor(hist.length / 2);
+      const early = pct(hist.slice(0, half).reduce((a, b) => a + b, 0), half);
+      const recent = pct(hist.slice(half).reduce((a, b) => a + b, 0), hist.length - half);
+      trend = recent - early > 5 ? 'up' : early - recent > 5 ? 'down' : 'flat';
+    }
+    return { d, acc, n: hist.length, trend, subtest: DOMAIN_SUBTEST[d] };
+  });
+  const style = (acc) => acc == null
+    ? { color: T.muted, bg: 'var(--surface-2)', border: T.hairline }
+    : acc >= 80 ? { color: 'var(--green)', bg: 'var(--green-bg)', border: 'var(--green-border)' }
+    : acc >= 60 ? { color: 'var(--gold)', bg: 'var(--accent-bg)', border: 'var(--border)' }
+    : { color: 'var(--red)', bg: 'var(--red-bg)', border: 'var(--red-border)' };
+  const weakest = rows.filter(r => r.acc != null).sort((a, b) => a.acc - b.acc).slice(0, 3);
+  const hasData = rows.some(r => r.acc != null);
+  return (
+    <Card style={{ marginBottom: 18 }}>
+      <Cap color={T.orange2} mb={12}>Competency Heat Map · all recorded answers</Cap>
+      {!hasData && <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: 0, lineHeight: 1.55 }}>Answer scored questions (pretest, quizzes, post-test) to build your domain-by-domain accuracy map.</p>}
+      {hasData && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 8 }}>
+          {rows.map(r => {
+            const s = style(r.acc);
+            return (
+              <div key={r.d} style={{ padding: '10px 12px', borderRadius: 12, background: s.bg, border: `1px solid ${s.border}` }}>
+                <div style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 700, color: T.ink, lineHeight: 1.3, marginBottom: 4 }}>{r.d}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 6 }}>
+                  <strong style={{ fontFamily: T.sans, fontSize: 17, color: s.color, fontFeatureSettings: "'tnum' 1" }}>{r.acc == null ? '—' : `${r.acc}%`}</strong>
+                  <span style={{ fontFamily: T.sans, fontSize: 10.5, color: T.muted, whiteSpace: 'nowrap' }}>
+                    {r.acc == null ? 'no data' : `${r.n} answered`}
+                    {r.trend && <span aria-label={r.trend === 'up' ? 'improving' : r.trend === 'down' ? 'declining' : 'steady'} style={{ marginLeft: 4, fontWeight: 800, color: r.trend === 'up' ? 'var(--green)' : r.trend === 'down' ? 'var(--red)' : T.muted }}>{r.trend === 'up' ? '▲' : r.trend === 'down' ? '▼' : '–'}</span>}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {weakest.length > 0 && (
+        <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.hairline}` }}>
+          <Cap color={T.muted} mb={8}>Weakest — study these first</Cap>
+          {weakest.map((r, i) => (
+            <div key={r.d} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '5px 0', fontFamily: T.sans, fontSize: 13.5 }}>
+              <span style={{ color: T.ink, fontWeight: 600, flex: 1 }}>{i + 1}. {r.d} <span style={{ color: T.muted, fontWeight: 400 }}>({r.acc}%)</span></span>
+              <button onClick={() => onOpenModule(r.d)} aria-label={`Open the ${r.d} study module`}
+                style={{ fontFamily: T.sans, fontSize: 11.5, fontWeight: 700, color: T.orange2, background: 'var(--accent-bg)', border: `1px solid ${T.hairline}`, padding: '5px 13px', borderRadius: 99, cursor: 'pointer', whiteSpace: 'nowrap' }}>Study →</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+};
+
+// "My Misses" review bank card — bank size, retired count, launch button.
+const MissBankCard = ({ missBank, onReview }) => {
+  const entries = Object.values(missBank || {});
+  const active = entries.filter(e => !e.retired && QUESTION_INDEX[e.id]);
+  const retired = entries.filter(e => e.retired).length;
+  return (
+    <Card style={{ marginBottom: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        <Cap color={T.orange2}>My Misses · review bank</Cap>
+        {entries.length > 0 && <Pill color={retired === entries.length ? T.green : T.orange2}>{`You've cleared ${retired} of ${entries.length} misses`}</Pill>}
+      </div>
+      {entries.length === 0
+        ? <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, margin: 0, lineHeight: 1.55 }}>Questions you miss anywhere in the course collect here for targeted re-drilling. Nothing yet — keep practicing.</p>
+        : active.length === 0
+          ? <p style={{ fontFamily: T.sans, fontSize: 14, color: T.green, margin: 0, fontWeight: 600 }}>✓ Every missed question has been retired — answered correctly twice in a row on review.</p>
+          : <>
+              <p style={{ fontFamily: T.sans, fontSize: 14, color: T.ink, margin: '0 0 14px', lineHeight: 1.55 }}>{active.length} missed question{active.length > 1 ? 's' : ''} waiting for review. A question retires after you answer it correctly twice in a row.</p>
+              <Btn onClick={onReview} variant="accent" style={{ width: '100%', padding: '13px' }}>Review {active.length} Miss{active.length > 1 ? 'es' : ''} →</Btn>
+            </>}
+    </Card>
+  );
+};
+
+// ─── REVIEW MISSES (re-quiz only missed items, shuffled) ────
+const ReviewMisses = ({ st, up, onExit }) => {
+  const [order] = useState(() => shuffle(Object.values(st.missBank || {}).filter(e => !e.retired && QUESTION_INDEX[e.id]).map(e => e.id)));
+  const [idx, setIdx] = useState(0);
+  const [picked, setPicked] = useState(null);
+  const [results, setResults] = useState([]); // {id, correct}
+  if (order.length === 0 || idx >= order.length) {
+    const cleared = results.filter(r => r.correct).length;
+    return (
+      <Page narrow>
+        <header style={{ textAlign: 'center', marginBottom: 24 }}>
+          <div style={{ fontSize: 44, marginBottom: 6 }}>🎯</div>
+          <Cap color={T.orange2} mb={8}>Review Misses · Session Complete</Cap>
+          <h2 style={{ fontFamily: T.sans, fontWeight: 800, fontSize: '2rem', color: T.ink, letterSpacing: '-.02em', margin: 0 }}>{cleared} of {results.length} correct</h2>
+          <p style={{ fontFamily: T.sans, fontSize: 14, color: T.muted, marginTop: 10, lineHeight: 1.55 }}>Each question retires after two consecutive correct reviews. Misses stay in the bank for next time.</p>
+        </header>
+        <Btn onClick={onExit} variant="primary" style={{ width: '100%', padding: '14px' }}>← Back to My Progress</Btn>
+      </Page>
+    );
+  }
+  const id = order[idx];
+  const q = QUESTION_INDEX[id];
+  const entry = st.missBank[id];
+  const answered = picked != null;
+  const choose = (i) => {
+    if (answered) return;
+    setPicked(i);
+    const correct = i === q.c;
+    setResults(r => [...r, { id, correct }]);
+    const rec = applyAnswerEvents(st.domainHistory, st.missBank, [{ q, correct }], true);
+    up(rec);
+  };
+  return (
+    <Page narrow>
+      <button onClick={onExit} style={{ ...baseStyles.cap, fontSize: 10, color: T.muted, background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: 18 }}>← Exit review</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12, flexWrap: 'wrap' }}>
+        <Pill color={T.orange2}>Review Misses · missed {entry?.missCount || 1}×{entry?.correctStreak ? ` · streak ${entry.correctStreak}/2` : ''}</Pill>
+        <span style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, fontWeight: 600 }}>Question {idx + 1} of {order.length}</span>
+      </div>
+      <div style={{ ...baseStyles.cap, fontSize: 10, color: T.muted, marginBottom: 14 }}>{q.d}</div>
+      <Card style={{ marginBottom: 18, padding: '22px 24px' }}>
+        <p id="review-stem" style={{ fontFamily: T.serif, fontSize: 20, lineHeight: 1.55, color: T.ink, margin: 0, fontWeight: 500 }}>{q.q}</p>
+      </Card>
+      <div role="radiogroup" aria-labelledby="review-stem" onKeyDown={radioGroupKeys} style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+        {q.a.map((opt, i) => {
+          const isPicked = picked === i;
+          const showCorrect = answered && i === q.c;
+          const showWrong = answered && isPicked && i !== q.c;
+          const border = showCorrect ? 'var(--green-border)' : showWrong ? 'var(--red-border)' : isPicked ? T.orange : T.hairline;
+          const bg = showCorrect ? 'var(--green-bg)' : showWrong ? 'var(--red-bg)' : T.glass;
+          return (
+            <button key={i} role="radio" aria-checked={isPicked} onClick={() => choose(i)} disabled={answered && !isPicked && i !== q.c}
+              tabIndex={isPicked || (picked == null && i === 0) ? 0 : -1}
+              style={{ textAlign: 'left', padding: '13px 16px', borderRadius: 14, border: `2px solid ${border}`, background: bg, cursor: answered ? 'default' : 'pointer', fontFamily: T.sans, fontSize: 15.5, color: T.ink, display: 'flex', alignItems: 'center', gap: 13 }}>
+              <span aria-hidden="true" style={{ width: 28, height: 28, borderRadius: '50%', flexShrink: 0, border: `2px solid ${showCorrect ? T.green : showWrong ? T.red : T.hairline}`, background: showCorrect ? T.green : showWrong ? T.red : 'transparent', color: (showCorrect || showWrong) ? '#fff' : T.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800 }}>{['A', 'B', 'C', 'D'][i]}</span>
+              <span style={{ flex: 1, lineHeight: 1.5 }}>{opt}</span>
+              {showCorrect && <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, color: T.green, whiteSpace: 'nowrap' }}>✓ Correct</span>}
+              {showWrong && <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, color: T.red, whiteSpace: 'nowrap' }}>✗ Your answer</span>}
+            </button>
+          );
+        })}
+      </div>
+      {answered && (
+        <Card style={{ marginBottom: 20, background: 'var(--accent-bg)' }}>
+          <div style={{ ...baseStyles.cap, fontSize: 10, color: T.orange2, marginBottom: 8 }}>Annotation</div>
+          <p style={{ fontFamily: T.sans, fontSize: 15, lineHeight: 1.6, color: T.ink, margin: 0 }}>{q.r}</p>
+        </Card>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <Btn onClick={() => { setPicked(null); setIdx(idx + 1); }} variant="primary" disabled={!answered} style={{ padding: '12px 26px' }}>{idx < order.length - 1 ? 'Next →' : 'Finish'}</Btn>
+      </div>
+    </Page>
+  );
+};
+
 // ─── MY PROGRESS (per-user performance report) ─────────────
 // Reads the same persisted state the rest of the app writes — works entirely
 // from this device's data, with or without the telemetry backend.
@@ -1819,7 +2141,7 @@ const scoreSummary = (s) => {
   const o = Object.values(s.subtests).reduce((a, b) => ({ correct: a.correct + b.correct, total: a.total + b.total }), { correct: 0, total: 0 });
   return { overallPct: pct(o.correct, o.total), subtests: Object.fromEntries(Object.entries(s.subtests).map(([k, v]) => [k, pct(v.correct, v.total)])) };
 };
-const MyProgress = ({ st, onNav }) => {
+const MyProgress = ({ st, onNav, onReviewMisses, onOpenModule }) => {
   const user = getUser();
   const domains = Object.keys(MODULES);
   const pre = st.pretestScores ? scoreSummary(st.pretestScores) : null;
@@ -1850,6 +2172,8 @@ const MyProgress = ({ st, onNav }) => {
         </Card>
       )}
 
+      {started && <ReadinessProjection attempts={st.attempts || []} />}
+
       {latest && (
         <Card style={{ marginBottom: 18, background: allReady ? 'var(--green-bg)' : undefined }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
@@ -1872,6 +2196,9 @@ const MyProgress = ({ st, onNav }) => {
           )}
         </Card>
       )}
+
+      {started && <DomainHeatMap domainHistory={st.domainHistory} onOpenModule={onOpenModule} />}
+      {started && <MissBankCard missBank={st.missBank} onReview={onReviewMisses} />}
 
       {started && (
         <Card style={{ marginBottom: 18 }}>
@@ -1923,10 +2250,10 @@ const MyProgress = ({ st, onNav }) => {
 const STORAGE_KEY = 'multi-cst-state-v2';
 const OLD_STORAGE_KEYS = ["multi-cst-245-state-v1"];
 // fields that survive page reload (skip transient quiz session + reset confirmation)
-const PERSIST_FIELDS = ['phase', 'qIndex', 'answers', 'pretestScores', 'pretestAnswers', 'posttestAnswers', 'postScores', 'posttestStarted', 'completedModules', 'conceptProgress', 'moduleScores', 'quizHistory', 'crScored', 'crPromptId', 'theme'];
+const PERSIST_FIELDS = ['phase', 'qIndex', 'answers', 'pretestScores', 'pretestAnswers', 'posttestAnswers', 'postScores', 'posttestStarted', 'completedModules', 'conceptProgress', 'moduleScores', 'quizHistory', 'crScored', 'crPromptId', 'theme', 'attempts', 'domainHistory', 'missBank'];
 // transient phases can't resume after a reload (their session state isn't
 // persisted) — send the user to the nearest hub instead of a crash/blank page
-const PHASE_FALLBACK = { module: 'modules', quizRun: 'quizPicker', quizDone: 'quizPicker' };
+const PHASE_FALLBACK = { module: 'modules', quizRun: 'quizPicker', quizDone: 'quizPicker', reviewMisses: 'progress' };
 
 export default function App() {
   const QUIZ_POOL = useMemo(() => buildQuizPool(), []);
@@ -1943,6 +2270,26 @@ export default function App() {
         if (PHASE_FALLBACK[restored.phase]) restored.phase = PHASE_FALLBACK[restored.phase];
         if (['results', 'modules', 'posttest'].includes(restored.phase) && !restored.pretestScores) restored.phase = 'welcome';
         if (restored.phase === 'comparison' && !restored.postScores) restored.phase = restored.pretestScores ? 'results' : 'welcome';
+        // Backfill (one-time): older saves have no missBank/domainHistory/attempts.
+        // Seed them from the per-question answers that ARE recoverable from the
+        // stored state (pretest/posttest answers + quizHistory pcts); anything
+        // not recoverable simply starts empty — never fabricated.
+        if (!restored.missBank && !restored.domainHistory) {
+          let dh = {}, mb = {}; const attempts = [];
+          const seed = (qs, ans, kind) => {
+            const events = qs.map((q, i) => ({ q, correct: ans[i] === q.c })).filter((_, i) => ans[i] !== undefined);
+            if (events.length === 0) return;
+            const r = applyAnswerEvents(dh, mb, events); dh = r.domainHistory; mb = r.missBank;
+            attempts.push({ kind, pct: pct(events.filter(e => e.correct).length, events.length), bySubtest: bySubtestPct(qs, ans), ts: null });
+          };
+          if (restored.pretestScores && restored.pretestAnswers) seed(PRETEST, restored.pretestAnswers, 'pretest');
+          (restored.quizHistory || []).forEach(h => {
+            const sk = DOMAIN_SUBTEST[h.domain];
+            attempts.push({ kind: 'quiz', pct: h.pct, bySubtest: sk ? { [sk]: h.pct } : {}, ts: h.ts || null });
+          });
+          if (restored.postScores && restored.posttestAnswers) seed(POSTTEST, restored.posttestAnswers, 'posttest');
+          restored.domainHistory = dh; restored.missBank = mb; restored.attempts = attempts.slice(-ATTEMPT_CAP);
+        }
         return { ...base, ...restored };
       }
     } catch {}
@@ -1988,11 +2335,14 @@ export default function App() {
   if (st.phase === 'welcome')    return <Shell nav={nav}><Welcome onStart={() => up({ phase: 'pretest', qIndex: 0, answers: {}, pretestAnswers: {} })} /></Shell>;
   if (st.phase === 'flashcards') return <Shell nav={nav}><Flashcards st={st} up={up} /></Shell>;
   if (st.phase === 'cresponse')  return <Shell nav={nav}><ConstructedResponse st={st} up={up} /></Shell>;
-  if (st.phase === 'progress')   return <Shell nav={nav}><MyProgress st={st} onNav={handleNav} /></Shell>;
+  if (st.phase === 'progress')   return <Shell nav={nav}><MyProgress st={st} onNav={handleNav}
+    onReviewMisses={() => up({ phase: 'reviewMisses' })}
+    onOpenModule={(d) => up({ phase: 'module', activeModule: d, modPhase: 'content', modPQIndex: 0, modPAnswers: {} })} /></Shell>;
+  if (st.phase === 'reviewMisses') return <Shell nav={nav}><ReviewMisses st={st} up={up} onExit={() => up({ phase: 'progress' })} /></Shell>;
   if (st.phase === 'quizPicker') return <Shell nav={nav}><QuizPicker pool={QUIZ_POOL} onStart={(domain, len, qs) => up({ phase: 'quizRun', quizDomain: domain, quizLen: len, quizQs: qs, quizIdx: 0, quizAnswers: {} })} /></Shell>;
-  if (st.phase === 'quizRun' && st.quizQs) return <Shell nav={nav}><QuestionScreen questions={st.quizQs} answers={st.quizAnswers} qIndex={st.quizIdx} onAnswer={(i, a) => up({ quizAnswers: { ...st.quizAnswers, [i]: a } })} onNav={(d) => up({ quizIdx: Math.max(0, Math.min(st.quizQs.length - 1, st.quizIdx + d)) })} onSubmit={() => { const correct = st.quizQs.filter((q, i) => st.quizAnswers[i] === q.c).length; const p = pct(correct, st.quizQs.length); track('quiz_completed', { domain: st.quizDomain, len: st.quizQs.length, pct: p }); up({ phase: 'quizDone', quizHistory: [...(st.quizHistory || []), { domain: st.quizDomain, len: st.quizQs.length, pct: p, ts: new Date().toISOString() }].slice(-30) }); }} phase={`${st.quizDomain} Quiz`} /></Shell>;
+  if (st.phase === 'quizRun' && st.quizQs) return <Shell nav={nav}><QuestionScreen questions={st.quizQs} answers={st.quizAnswers} qIndex={st.quizIdx} onAnswer={(i, a) => up({ quizAnswers: { ...st.quizAnswers, [i]: a } })} onNav={(d) => up({ quizIdx: Math.max(0, Math.min(st.quizQs.length - 1, st.quizIdx + d)) })} onSubmit={() => { const correct = st.quizQs.filter((q, i) => st.quizAnswers[i] === q.c).length; const p = pct(correct, st.quizQs.length); const events = st.quizQs.map((q, i) => ({ q, correct: st.quizAnswers[i] === q.c })); const rec = applyAnswerEvents(st.domainHistory, st.missBank, events); const missedCount = events.filter(e => !e.correct).length; const sk = DOMAIN_SUBTEST[st.quizDomain]; track('quiz_completed', { domain: st.quizDomain, len: st.quizQs.length, pct: p, byDomain: byDomainPct(st.quizQs, st.quizAnswers), missedCount }); up({ phase: 'quizDone', ...rec, attempts: [...(st.attempts || []), { kind: 'quiz', pct: p, bySubtest: sk ? { [sk]: p } : {}, ts: new Date().toISOString() }].slice(-ATTEMPT_CAP), quizHistory: [...(st.quizHistory || []), { domain: st.quizDomain, len: st.quizQs.length, pct: p, ts: new Date().toISOString() }].slice(-30) }); }} phase={`${st.quizDomain} Quiz`} /></Shell>;
   if (st.phase === 'quizDone' && st.quizQs) return <Shell nav={nav}><QuizResults domain={st.quizDomain} qs={st.quizQs} answers={st.quizAnswers} onRetry={() => up({ phase: 'quizRun', quizQs: shuffle(st.quizQs), quizIdx: 0, quizAnswers: {} })} onPick={() => up({ phase: 'quizPicker', quizDomain: null, quizQs: null, quizIdx: 0, quizAnswers: {} })} /></Shell>;
-  if (st.phase === 'pretest')    return <Shell nav={nav}><QuestionScreen questions={PRETEST} answers={st.answers} qIndex={st.qIndex} onAnswer={(i, a) => { const next = { ...st.answers, [i]: a }; up({ answers: next, pretestAnswers: next }); }} onNav={(d) => up({ qIndex: Math.max(0, Math.min(PRETEST.length - 1, st.qIndex + d)) })} onSubmit={() => { const s = calcScores(PRETEST, st.answers); up({ phase: 'results', pretestScores: s, pretestAnswers: { ...st.answers } }); track('pretest_completed', { ...scoreSummary(s), weak: Object.entries(s.domains).filter(([, v]) => pct(v.correct, v.total) < 70).map(([d]) => d) }); }} phase="Pretest" /></Shell>;
+  if (st.phase === 'pretest')    return <Shell nav={nav}><QuestionScreen questions={PRETEST} answers={st.answers} qIndex={st.qIndex} onAnswer={(i, a) => { const next = { ...st.answers, [i]: a }; up({ answers: next, pretestAnswers: next }); }} onNav={(d) => up({ qIndex: Math.max(0, Math.min(PRETEST.length - 1, st.qIndex + d)) })} onSubmit={() => { const s = calcScores(PRETEST, st.answers); const events = PRETEST.map((q, i) => ({ q, correct: st.answers[i] === q.c })); const rec = applyAnswerEvents(st.domainHistory, st.missBank, events); const sum = scoreSummary(s); up({ phase: 'results', pretestScores: s, pretestAnswers: { ...st.answers }, ...rec, attempts: [...(st.attempts || []), { kind: 'pretest', pct: sum.overallPct, bySubtest: bySubtestPct(PRETEST, st.answers), ts: new Date().toISOString() }].slice(-ATTEMPT_CAP) }); track('pretest_completed', { ...sum, byDomain: byDomainPct(PRETEST, st.answers), weak: Object.entries(s.domains).filter(([, v]) => pct(v.correct, v.total) < 70).map(([d]) => d) }); }} phase="Pretest" /></Shell>;
   // when no domains are flagged, the CTA reads "Proceed to the Post-Test" — route accordingly
   if (st.phase === 'results')    return <Shell nav={nav}><Results scores={st.pretestScores} weakDomains={weak} sourceQuestions={PRETEST} sourceAnswers={st.pretestAnswers} onContinue={() => up(weak.length > 0 ? { phase: 'modules' } : { phase: 'posttest', posttestStarted: false })} /></Shell>;
   if (st.phase === 'modules')    return <Shell nav={nav}><ModuleHub domains={[...weak, ...Object.keys(MODULES).filter(d => !weak.includes(d))]} weakDomains={weak} completedModules={st.completedModules} onSelect={(d) => up({ phase: 'module', activeModule: d, modPhase: 'content', modPQIndex: 0, modPAnswers: {} })} onSkip={() => up({ phase: 'posttest', posttestStarted: false })} /></Shell>;
@@ -2008,7 +2358,7 @@ export default function App() {
       </div>
     </Page>
   ) : (
-    <QuestionScreen questions={POSTTEST} answers={st.answers} qIndex={st.qIndex} onAnswer={(i, a) => { const next = { ...st.answers, [i]: a }; up({ answers: next, posttestAnswers: next }); }} onNav={(d) => up({ qIndex: Math.max(0, Math.min(POSTTEST.length - 1, st.qIndex + d)) })} onSubmit={() => { const s = calcScores(POSTTEST, st.answers); up({ phase: 'comparison', postScores: s, posttestAnswers: { ...st.answers } }); const sum = scoreSummary(s); const pre = st.pretestScores ? scoreSummary(st.pretestScores).overallPct : null; track('posttest_completed', { ...sum, prePct: pre, growth: pre == null ? null : sum.overallPct - pre }); }} phase="Post-Test" />
+    <QuestionScreen questions={POSTTEST} answers={st.answers} qIndex={st.qIndex} onAnswer={(i, a) => { const next = { ...st.answers, [i]: a }; up({ answers: next, posttestAnswers: next }); }} onNav={(d) => up({ qIndex: Math.max(0, Math.min(POSTTEST.length - 1, st.qIndex + d)) })} onSubmit={() => { const s = calcScores(POSTTEST, st.answers); const events = POSTTEST.map((q, i) => ({ q, correct: st.answers[i] === q.c })); const rec = applyAnswerEvents(st.domainHistory, st.missBank, events); const sum = scoreSummary(s); up({ phase: 'comparison', postScores: s, posttestAnswers: { ...st.answers }, ...rec, attempts: [...(st.attempts || []), { kind: 'posttest', pct: sum.overallPct, bySubtest: bySubtestPct(POSTTEST, st.answers), ts: new Date().toISOString() }].slice(-ATTEMPT_CAP) }); const pre = st.pretestScores ? scoreSummary(st.pretestScores).overallPct : null; track('posttest_completed', { ...sum, byDomain: byDomainPct(POSTTEST, st.answers), prePct: pre, growth: pre == null ? null : sum.overallPct - pre }); }} phase="Post-Test" />
   )}</Shell>;
   if (st.phase === 'comparison') return <Shell nav={nav}><Results scores={st.postScores} weakDomains={[]} pretestScores={st.pretestScores} isPost={true} sourceQuestions={POSTTEST} sourceAnswers={st.posttestAnswers} onContinue={() => {
     try { localStorage.removeItem(STORAGE_KEY); } catch {}
